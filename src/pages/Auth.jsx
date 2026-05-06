@@ -25,6 +25,7 @@ const Auth = ({ isExamPeriod }) => {
   const ADMIN_IDS = ['pjy', 'admin', 'manager', '1111111', '관리자']; 
 
   // 1. 로그인 화면
+  // 1. 로그인 화면
   if (!isSignUpMode && !isForgotPasswordMode) {
     return (
       <div style={{ width: '100%', minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'transparent', fontFamily: 'sans-serif' }}>
@@ -39,14 +40,25 @@ const Auth = ({ isExamPeriod }) => {
 
           <h1 style={{ color: '#0f172a', marginBottom: '35px', fontWeight: '900', fontSize: '2.2rem' }}>도서관 예약</h1>
           
-          <input type="text" placeholder="학번 입력" onChange={e => setStudentId(e.target.value)} 
-            style={{ width: '100%', padding: '18px', marginBottom: '15px', borderRadius: '12px', border: 'none', backgroundColor: '#1e293b', boxSizing: 'border-box', fontSize: '1.1rem', fontWeight: '900', color: '#ffffff' }} />
-          
-          <input type="password" placeholder="비밀번호" onChange={e => setPassword(e.target.value)} 
-            style={{ width: '100%', padding: '18px', marginBottom: '30px', borderRadius: '12px', border: 'none', backgroundColor: '#1e293b', boxSizing: 'border-box', fontSize: '1.1rem', fontWeight: '900', color: '#ffffff' }} />
-          
-          <button onClick={() => signInWithEmailAndPassword(auth, `${studentId}@test.com`, password).catch(()=>alert("학번 또는 비밀번호가 틀립니다."))} 
-            style={{ width: '100%', padding: '20px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: '12px', fontWeight: '900', cursor: 'pointer', fontSize: '1.2rem', transition: '0.2s' }}>로그인</button>
+          {/* 🔥 폼(form) 태그 추가: 엔터키 인식 및 페이지 새로고침 방지 */}
+          <form 
+            onSubmit={(e) => {
+              e.preventDefault(); // 엔터키 누를 때 페이지 새로고침 방지
+              signInWithEmailAndPassword(auth, `${studentId}@test.com`, password)
+                .catch(() => alert("학번 또는 비밀번호가 틀립니다."));
+            }} 
+            style={{ margin: 0, padding: 0 }}
+          >
+            <input type="text" placeholder="학번 입력" onChange={e => setStudentId(e.target.value)} 
+              style={{ width: '100%', padding: '18px', marginBottom: '15px', borderRadius: '12px', border: 'none', backgroundColor: '#1e293b', boxSizing: 'border-box', fontSize: '1.1rem', fontWeight: '900', color: '#ffffff' }} />
+            
+            <input type="password" placeholder="비밀번호" onChange={e => setPassword(e.target.value)} 
+              style={{ width: '100%', padding: '18px', marginBottom: '30px', borderRadius: '12px', border: 'none', backgroundColor: '#1e293b', boxSizing: 'border-box', fontSize: '1.1rem', fontWeight: '900', color: '#ffffff' }} />
+            
+            {/* 🔥 버튼 타입을 submit으로 변경하여 엔터키와 연동 */}
+            <button type="submit"
+              style={{ width: '100%', padding: '20px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: '12px', fontWeight: '900', cursor: 'pointer', fontSize: '1.2rem', transition: '0.2s' }}>로그인</button>
+          </form>
           
           <div style={{ display: 'flex', justifyContent: 'center', gap: '20px', marginTop: '30px' }}>
             <p onClick={() => setIsSignUpMode(true)} style={{ color: '#2563eb', cursor: 'pointer', fontWeight: '900', margin: 0 }}>회원가입</p>

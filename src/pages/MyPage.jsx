@@ -1,102 +1,94 @@
 import React, { useState, useEffect } from 'react';
-// 🔥 [수정됨] 알림 로그를 남기기 위해 addDoc, serverTimestamp 추가
-import { collection, doc, onSnapshot, query, where, deleteDoc, addDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, doc, onSnapshot, query, where } from 'firebase/firestore';
 import { db } from '../firebase'; 
 import QRCodeGen from '../components/QRCodeGen';
 
 const MyPage = ({ user, setViewMode }) => {
   const [userData, setUserData] = useState(null);
   const [logs, setLogs] = useState([]);
-  const [myReservations, setMyReservations] = useState([]); 
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    if (!user || (!user.uid && !user.studentNo)) return;
-    const currentUserId = user.uid || user.studentNo;
-    const myUserId = user?.email || user?.studentNo; 
+  // 🚨 컴포넌트 선언부에 setViewMode가 잘 들어있는지 꼭 확인하세요!
+  // const MyPage = ({ user, setViewMode }) => { ...
 
+  useEffect(() => {
+    // 유저 정보가 없으면 실행 안 함
+    if (!user || (!user.uid && !user.studentNo)) return;
+
+    // 현재 유저의 고유 식별자 (uid가 없으면 studentNo 사용)
+    const currentUserId = user.uid || user.studentNo;
+
+    // 1️⃣ 내 상태 정보(User 컬렉션) '실시간' 구독
     const userRef = doc(db, 'User', currentUserId);
     const unsubUser = onSnapshot(userRef, (userSnap) => {
-      if (userSnap.exists()) setUserData(userSnap.data());
+      if (userSnap.exists()) {
+        setUserData(userSnap.data());
+      }
     });
 
+    // 2️⃣ 내 행동 로그(Log 컬렉션) '실시간' 구독 및 필터링
     const logsRef = collection(db, 'Log'); 
     const unsubLogs = onSnapshot(logsRef, (logSnap) => {
       const logList = logSnap.docs
         .map(doc => ({ id: doc.id, ...doc.data() }))
         .filter(log => 
-          log.uid === user?.uid || log.uid === user?.email ||       
-          log.studentNo === user?.studentNo || log.studentNo === user?.name      
+          log.uid === user?.uid || 
+          log.uid === user?.email ||       
+          log.studentNo === user?.studentNo || 
+          log.studentNo === user?.name      
         )
         .sort((a, b) => {
           const timeA = (a.timestamp || a.createdAt)?.toDate ? (a.timestamp || a.createdAt).toDate() : new Date(0);
           const timeB = (b.timestamp || b.createdAt)?.toDate ? (b.timestamp || b.createdAt).toDate() : new Date(0);
           return timeB - timeA;
         });
+      
       setLogs(logList);
+      setLoading(false);
     });
 
+    // 🚨 3️⃣ [새로 추가된 마법!] 내 좌석(Seat 컬렉션) 상태 '실시간' 감시
+    const myUserId = user?.email || user?.studentNo; 
     const seatsRef = collection(db, 'Seat');
-    const qSeat = query(seatsRef, where("userId", "==", myUserId));
-    const unsubSeat = onSnapshot(qSeat, (snapshot) => {
+    const q = query(seatsRef, where("userId", "==", myUserId));
+    
+    const unsubSeat = onSnapshot(q, (snapshot) => {
       snapshot.docChanges().forEach((change) => {
+        // 내 자리 데이터가 방금 막 '수정(modified)' 되었다면
         if (change.type === "modified") {
           const seatData = change.doc.data();
+          
+          // 방금 키오스크가 내 자리를 '사용 중(OCCUPIED)'으로 바꿨다면!
           if (seatData.status === "OCCUPIED") {
             alert('✅ QR 인증 완료!\n자리 사용을 시작합니다.');
-            if (setViewMode) setViewMode('MAP');
+            if (setViewMode) {
+              setViewMode('MAP'); // 내 폰 화면을 배치도로 자동 전환!
+            }
           }
         }
       });
     });
 
-    const resRef = collection(db, 'Reservations');
-    const qRes = query(resRef, where("userId", "==", myUserId));
-    const unsubRes = onSnapshot(qRes, (snap) => {
-      const resList = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setMyReservations(resList);
-      setLoading(false);
-    });
-
+    // 🧹 컴포넌트가 꺼질 때 구독 3개 모두 깔끔하게 취소 (메모리 누수, 중복 알림 방지)
     return () => {
       unsubUser();
       unsubLogs();
       unsubSeat(); 
-      unsubRes();
     };
+    
+  // 🚨 의존성 배열에 setViewMode 추가 (버그 방지용)
   }, [user, setViewMode]);
 
-  // 🔥 [핵심 수정!] 예약 취소 시 로그 남기기
-  const handleCancelReservation = async (res) => {
-    if (window.confirm("정말 이 예약을 취소하시겠습니까?")) {
-      try {
-        await deleteDoc(doc(db, "Reservations", res.id));
-        
-        // 🔔 취소했다는 알림 데이터를 Log 컬렉션에 쏩니다!
-        await addDoc(collection(db, "Log"), {
-          action: 'CANCEL',
-          seatId: res.seatId,
-          seatLabel: res.seatId,
-          uid: user.email,
-          result: '유저 직접 취소',
-          createdAt: serverTimestamp()
-        });
-
-        alert("✅ 예약이 성공적으로 취소되었습니다.");
-      } catch (error) {
-        alert("🚨 취소 중 오류가 발생했습니다.");
-      }
-    }
-  };
-
-  const handleModifyReservation = async (res) => {
-    if (window.confirm("예약을 변경하시려면 현재 예약을 취소하고 다시 예약해야 합니다.\n기존 예약을 취소하고 배치도로 이동하시겠습니까?")) {
-      try {
-        await deleteDoc(doc(db, "Reservations", res.id));
-        if (setViewMode) setViewMode('MAP');
-      } catch (error) {
-        alert("🚨 취소 후 이동 중 오류가 발생했습니다.");
-      }
+  // 💡 로그의 영어 action 코드를 예쁜 한글로 바꿔주는 마법의 번역기
+  const getActionBadge = (action) => {
+    switch (action) {
+      case 'RESERVE': return { text: '✅ 예약 성공', color: '#2563eb', bg: '#eff6ff' };
+      case 'CHECK_IN': return { text: '📲 입실 완료', color: '#16a34a', bg: '#f0fdf4' };
+      case 'RETURN': return { text: '👋 정상 퇴실', color: '#475569', bg: '#f8fafc' };
+      case 'NO_SHOW_CANCEL': return { text: '🚨 노쇼 취소', color: '#dc2626', bg: '#fee2e2' };
+      case 'FORCE_EVICT': return { text: '❌ 강제 퇴실', color: '#991b1b', bg: '#fef2f2' };
+      case 'AUTO_CHECKOUT': return { text: '⏳ 자동 퇴실', color: '#d97706', bg: '#fef3c7' }; // 새로 추가
+      default: return { text: `기타 (${action})`, color: '#64748b', bg: '#f1f5f9' };
     }
   };
 
@@ -109,9 +101,14 @@ const MyPage = ({ user, setViewMode }) => {
         <h1 style={{ color: '#0f172a', fontWeight: '700', margin: 0 }}>마이페이지</h1>
       </div>
 
+      {/* 🚨 딱 여기에 넣어주세요! (그러면 맨 위 import에 불이 들어옵니다) */}
       <QRCodeGen studentId={user?.studentNo || user?.email?.split('@')[0] || "학번없음"} />
 
-      <div style={{ background: '#fff', padding: '30px', borderRadius: '25px', marginBottom: '30px', boxShadow: '0 4px 15px rgba(0,0,0,0.05)' }}>
+      {/* 1️⃣ 내 패널티 상태 카드 */}
+      <div style={{ 
+        background: '#fff', padding: '30px', borderRadius: '25px', marginBottom: '30px',
+        boxShadow: '0 4px 15px rgba(0,0,0,0.05)'
+      }}>
         <h2 style={{ margin: '0 0 20px 0', fontSize: '1.2rem', fontWeight: '900', color: '#1e293b' }}>나의 패널티 현황</h2>
         <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap' }}>
           <div style={{ flex: 1, background: '#f8fafc', padding: '20px', borderRadius: '15px', textAlign: 'center', minWidth: '200px' }}>
@@ -120,6 +117,7 @@ const MyPage = ({ user, setViewMode }) => {
               {userData?.penaltyCount || 0} <span style={{ fontSize: '1rem', color: '#94a3b8' }}>/ 3회</span>
             </p>
           </div>
+          
           <div style={{ flex: 1, background: '#f8fafc', padding: '20px', borderRadius: '15px', textAlign: 'center', minWidth: '200px' }}>
             <p style={{ margin: 0, color: '#64748b', fontSize: '0.9rem', fontWeight: 'bold' }}>예약 정지 해제일</p>
             <p style={{ margin: '10px 0 0 0', fontSize: '1.1rem', fontWeight: '900', color: userData?.penaltyUntil ? '#dc2626' : '#16a34a' }}>
@@ -131,44 +129,20 @@ const MyPage = ({ user, setViewMode }) => {
         </div>
       </div>
 
-      <div style={{ background: '#fff', padding: '30px', borderRadius: '25px', marginBottom: '30px', boxShadow: '0 4px 15px rgba(0,0,0,0.05)' }}>
-        <h2 style={{ margin: '0 0 20px 0', fontSize: '1.2rem', fontWeight: '900', color: '#1e293b' }}>📅 나의 예약 현황</h2>
-        
-        {myReservations.length === 0 ? (
-          <div style={{ textAlign: 'center', background: '#f8fafc', padding: '40px 20px', borderRadius: '16px', color: '#64748b' }}>
-            <span style={{ fontSize: '2.5rem', display: 'block', marginBottom: '10px' }}>🪑</span>
-            <p style={{ fontWeight: '700', margin: 0 }}>현재 예약된 좌석이 없습니다.</p>
-          </div>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
-            {myReservations.map((res) => (
-              <div key={res.id} style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', background: '#fff', border: '2px solid #e2e8f0', padding: '20px', borderRadius: '16px', boxShadow: '0 4px 6px rgba(0,0,0,0.02)' }}>
-                <div>
-                  <span style={{ background: '#fef08a', color: '#ca8a04', padding: '4px 10px', borderRadius: '8px', fontSize: '0.8rem', fontWeight: '900', display: 'inline-block', marginBottom: '10px' }}>예약 확정</span>
-                  <h4 style={{ margin: 0, fontSize: '1.3rem', color: '#0f172a', fontWeight: '900' }}>{res.seatId} 좌석</h4>
-                  <p style={{ margin: '8px 0 0 0', color: '#475569', fontWeight: '700', fontSize: '0.95rem' }}>
-                    📅 {res.date} <span style={{ margin: '0 5px', color: '#cbd5e1' }}>|</span> ⏰ {res.startTime} ~ {res.endTime}
-                  </p>
-                </div>
-                <div style={{ display: 'flex', gap: '10px', marginTop: '15px' }}>
-                  <button onClick={() => handleModifyReservation(res)} style={{ padding: '10px 16px', background: '#f1f5f9', color: '#475569', border: 'none', borderRadius: '10px', fontWeight: '800', cursor: 'pointer' }}>변경</button>
-                  <button onClick={() => handleCancelReservation(res)} style={{ padding: '10px 16px', background: '#fee2e2', color: '#dc2626', border: 'none', borderRadius: '10px', fontWeight: '800', cursor: 'pointer' }}>예약 취소</button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      <div style={{ background: '#fff', padding: '30px', borderRadius: '25px', boxShadow: '0 4px 15px rgba(0,0,0,0.05)' }}>
+      <div style={{ 
+        background: '#fff', padding: '30px', borderRadius: '25px', 
+        boxShadow: '0 4px 15px rgba(0,0,0,0.05)'
+      }}>
         <h2 style={{ margin: '0 0 20px 0', fontSize: '1.2rem', fontWeight: '900', color: '#1e293b' }}>최근 이용 이력</h2>
         
         {(() => {
           const dailyData = {};
           
           logs
+            // 💡 끝난 이용 기록(RETURN, AUTO_CHECKOUT)만 가져옵니다.
             .filter(log => log.action === 'RETURN' || log.action === 'AUTO_CHECKOUT')
             .forEach((log) => {
+              // 1️⃣ 날짜 구하기 로직 (동일)
               const logDate = (log.timestamp || log.createdAt)?.toDate ? (log.timestamp || log.createdAt).toDate() : new Date();
               const year = logDate.getFullYear();
               const month = logDate.getMonth() + 1;
@@ -177,9 +151,13 @@ const MyPage = ({ user, setViewMode }) => {
               const day = dayNames[logDate.getDay()];
               const dateString = `${year}년 ${month}월 ${date}일 ${day}요일`;
               
+              // 🚨 2️⃣ [여기가 핵심!] 복잡한 계산식 다 지우고, DB에 있는 진짜 사용 시간만 쏙 빼옵니다.
               let actualMinutes = log.usedMinutes || 0;
+
+              // (마이너스 방지 - 혹시 모르니 남겨둡니다)
               if (actualMinutes < 0) actualMinutes = 0;
 
+              // 3️⃣ 바구니에 차곡차곡 담기
               if (!dailyData[dateString]) {
                 dailyData[dateString] = { totalMinutes: 0, sortKey: logDate.getTime() };
               }
@@ -197,18 +175,30 @@ const MyPage = ({ user, setViewMode }) => {
           return (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '15px', maxHeight: '500px', overflowY: 'auto' }}>
               {groupedLogs.map((item, index) => {
+                // 🚨 분(m)을 시(h)와 분(m)으로 예쁘게 쪼개기
                 const h = Math.floor(item.totalMinutes / 60); 
                 const m = item.totalMinutes % 60;             
 
                 let durationText = '';
                 if (h > 0) durationText += `${h}시간 `;
                 if (m > 0) durationText += `${m}분`;
-                durationText = durationText.trim() || '1분 미만'; 
+                durationText = durationText.trim() || '1분 미만'; // 너무 짧으면 1분 미만으로 표시
 
                 return (
-                  <div key={index} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '18px 20px', background: '#f8fafc', borderRadius: '15px', marginBottom: '12px', border: '1px solid #e2e8f0', boxShadow: '0 2px 4px rgba(0,0,0,0.02)' }}>
-                    <div style={{ fontSize: '1.05rem', fontWeight: '800', color: '#1e293b' }}>{item.dateString}</div>
-                    <div style={{ background: '#eff6ff', color: '#2563eb', padding: '8px 16px', borderRadius: '20px', fontWeight: '900', fontSize: '0.95rem' }}>{durationText} 이용</div>
+                  <div key={index} style={{ 
+                    display: 'flex', justifyContent: 'space-between', alignItems: 'center', 
+                    padding: '18px 20px', background: '#f8fafc', borderRadius: '15px',
+                    marginBottom: '12px', border: '1px solid #e2e8f0', boxShadow: '0 2px 4px rgba(0,0,0,0.02)'
+                  }}>
+                    <div style={{ fontSize: '1.05rem', fontWeight: '800', color: '#1e293b' }}>
+                      {item.dateString}
+                    </div>
+                    <div style={{ 
+                      background: '#eff6ff', color: '#2563eb', padding: '8px 16px', 
+                      borderRadius: '20px', fontWeight: '900', fontSize: '0.95rem'
+                    }}>
+                      {durationText} 이용
+                    </div>
                   </div>
                 );
               })}

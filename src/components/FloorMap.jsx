@@ -86,8 +86,7 @@ const FloorMap = ({
                 return (
                   <div key={seat.id} 
                     onClick={() => { 
-                      if (seat.status === 'DISABLED' && !isAdmin) return;
-                      if (user) { setSelectedSeat(seat); setShowCancelWarning(false); } 
+                      setSelectedSeat(seat);
                     }}
                     style={{ 
                       height: '75px', padding: '8px 4px', boxSizing: 'border-box', background: bgColor, borderRadius: '12px', 
@@ -95,8 +94,7 @@ const FloorMap = ({
                       display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', 
                       cursor: cursorStyle, transition: '0.2s', textAlign: 'center', opacity: opacity,
                       boxShadow: isMySeat ? '0 0 12px rgba(37, 99, 235, 0.5)' : 'none', position: 'relative'
-                    }}
-                  >
+                    }}>
                     {/* 좌석 번호 */}
                     <span style={{ fontSize: '1.1rem', fontWeight: '900', color: textColor }}>
                       {seat.status === 'DISABLED' ? '🚫' : (seat.label.includes('스터디룸2') ? '1' : seat.id.split('-').pop())}
