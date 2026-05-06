@@ -81,7 +81,6 @@ function QRCodeGen({ studentId }) {
       
       {/* ⏳ 타이머 UI 변경 (좀 더 깔끔하고 작게 정보 전달용으로) */}
       <div style={{ 
-        display: 'flex', 
         justifyContent: 'center', 
         alignItems: 'center', 
         gap: '6px', 
