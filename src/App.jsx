@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { auth, db } from './firebase'; 
 import { signOut } from 'firebase/auth';
-import { doc, onSnapshot, updateDoc, collection, query, where, deleteDoc, addDoc, serverTimestamp } from 'firebase/firestore'; 
+import { doc, onSnapshot, updateDoc, collection, query, where, deleteDoc, addDoc, serverTimestamp, writeBatch } from 'firebase/firestore'; 
 import { format, addDays, startOfDay, startOfMonth, endOfMonth, startOfWeek, endOfWeek, eachDayOfInterval, isSameMonth, isSameDay, isPast, addMonths, subMonths } from 'date-fns';
 import { ko } from 'date-fns/locale';
 
+// 1. 공통 및 본인(상열님) 모듈
 import MyPage from './pages/MyPage';
 import ScannerPage from './pages/Scanner';
 import SeatModal from './components/SeatModal';
@@ -13,20 +14,31 @@ import FloorMap from './components/FloorMap';
 import AdminDashboard from './pages/AdminDashboard';
 import QRCodeGen from './components/QRCodeGen'; 
 
+// 2. 팀원 A (이벤트 & 랭킹 기능)
+import EventBanner from './components/EventBanner';
+import EventBoard from './pages/EventBoard';
+import EventDetail from './pages/EventDetail';
+import AdminEvents from './pages/AdminEvents';
+import RankingPage from './pages/RankingPage';
+import RankingBanner from './components/RankingBanner';
+
+// 3. 팀원 B (신고 소명 및 커스텀 UI)
+import { PenaltyAppealModal } from './components/ReportModule';
+
 import { useLibraryData } from './hooks/useLibraryData';
 import { useUserSession } from './hooks/useUserSession';
 
 const getNotificationText = (action, seatLabel) => {
   const label = seatLabel || '좌석';
   switch (action) {
-    case 'RESERVE': return `✅ ${label} 예약이 완료되었습니다.`;
-    case 'CANCEL': return `🗑️ ${label} 예약이 취소되었습니다.`;
-    case 'NO_SHOW_CANCEL': return `🚨 ${label} 미입실로 예약이 취소되었습니다.`;
-    case 'CHECK_IN': return `📲 ${label} 입실이 확인되었습니다.`;
-    case 'RETURN': return `👋 ${label} 퇴실 처리되었습니다.`;
-    case 'AUTO_CHECKOUT': return `⏳ ${label} 이용 시간이 만료되어 자동 퇴실되었습니다.`;
-    case 'FORCE_EVICT': return `❌ ${label} 관리자에 의해 강제 퇴실되었습니다.`;
-    default: return `🔔 ${label}에 새로운 변경사항이 있습니다.`;
+    case 'RESERVE': return `✅ ${label} 예약 완료`;
+    case 'CANCEL': return `🗑️ ${label} 예약 취소`;
+    case 'NO_SHOW_CANCEL': return `🚨 ${label} 미입실 취소`;
+    case 'CHECK_IN': return `📲 ${label} 입실 확인`;
+    case 'RETURN': return `👋 ${label} 퇴실 처리`;
+    case 'AUTO_CHECKOUT': return `⏳ ${label} 자동 퇴실`;
+    case 'FORCE_EVICT': return `❌ ${label} 관리자 강제 퇴실`;
+    default: return `🔔 새로운 알림이 있습니다.`;
   }
 };
 
@@ -36,7 +48,22 @@ const timeOptions = [...Array(28).keys()].map(i => {
   return `${String(h).padStart(2, '0')}:${m}`;
 });
 
-function App() {
+const getDefaultTimes = () => {
+  const now = new Date();
+  let h = now.getHours();
+  let m = now.getMinutes();
+  
+  if (h < 9) return { start: "09:00", end: "11:00" };
+  if (h >= 21) return { start: "20:30", end: "22:30" };
+  
+  const mins = m >= 30 ? "30" : "00";
+  const start = `${String(h).padStart(2, '0')}:${mins}`;
+  const end = `${String(h + 2).padStart(2, '0')}:${mins}`;
+  
+  return { start, end };
+};
+
+export default function App() {
   const { seats, user, currentUserData } = useLibraryData();
   useUserSession(user); 
 
@@ -44,17 +71,14 @@ function App() {
   const isAdmin = user && user.email && ADMIN_IDS.includes(user.email.split('@')[0]);
 
   const [systemSettings, setSystemSettings] = useState(null);
+  
   useEffect(() => {
     const unsub = onSnapshot(doc(db, 'System', 'settings'), (docSnap) => {
       if (docSnap.exists()) {
         const data = docSnap.data();
         setSystemSettings(data);
-        if (data.isExamActive && data.examEndDate) {
-          const end = new Date(data.examEndDate);
-          if (new Date() > end) {
-            updateDoc(doc(db, 'System', 'settings'), { isExamActive: false })
-              .then(() => alert("⏰ 시험기간 통제 기간이 종료되어 자동으로 해제되었습니다."));
-          }
+        if (data.isExamActive && data.examEndDate && new Date() > new Date(data.examEndDate)) {
+          updateDoc(doc(db, 'System', 'settings'), { isExamActive: false });
         }
       }
     });
@@ -72,9 +96,13 @@ function App() {
 
   const [activeFloor, setActiveFloor] = useState('1층');
   const [viewMode, setViewMode] = useState('MAP');
+
+  // 팀원 기능 상태
+  const [showRankingBanner, setShowRankingBanner] = useState(true);
+  const [selectedEvent, setSelectedEvent] = useState(null);
   
   useEffect(() => {
-    if (user && !isAdmin && (viewMode === 'USERS' || viewMode === 'SCANNER')) {
+    if (user && !isAdmin && (viewMode === 'USERS' || viewMode === 'SCANNER' || viewMode === 'EVENTS_ADMIN')) {
       setViewMode('MAP');
     }
   }, [user, isAdmin, viewMode]);
@@ -84,13 +112,17 @@ function App() {
   const [lastReadTime, setLastReadTime] = useState(() => parseInt(localStorage.getItem(`lastRead_${user?.email}`) || '0', 10));
 
   const [showSeatQR, setShowSeatQR] = useState(false);
-  const [qrString, setQrString] = useState("");
   const [timeLeft, setTimeLeft] = useState(15);
 
   const [selectedDate, setSelectedDate] = useState(startOfDay(new Date()));
   const [calendarMonth, setCalendarMonth] = useState(selectedDate);
-  const [startTime, setStartTime] = useState("09:00");
-  const [endTime, setEndTime] = useState("11:00");
+  
+  // 팀원 C의 UI 개선 적용 (드롭다운)
+  const [startTime, setStartTime] = useState(getDefaultTimes().start);
+  const [endTime, setEndTime] = useState(getDefaultTimes().end);
+  const [isStartOpen, setIsStartOpen] = useState(false);
+  const [isEndOpen, setIsEndOpen] = useState(false);
+  
   const [showFullCalendar, setShowFullCalendar] = useState(false);
   const [selectedSeat, setSelectedSeat] = useState(null);
 
@@ -122,63 +154,71 @@ function App() {
   }, []);
 
   const displaySeats = seats.map(seat => {
-    const isOverlapped = mapReservations.some(res => {
+    if (seat.status === 'DISABLED') return seat; 
+    const overlappingRes = mapReservations.find(res => {
       if (res.seatId !== seat.id || res.status === 'RETURNED') return false;
       return startTime < res.endTime && endTime > res.startTime;
     });
-    return { ...seat, status: isOverlapped ? 'RESERVED' : 'AVAILABLE' };
+    if (overlappingRes) {
+      return { 
+        ...seat, 
+        status: overlappingRes.status,
+        studentNo: overlappingRes.studentNo,
+        userId: overlappingRes.userId,
+        userName: overlappingRes.studentNo || overlappingRes.userId?.split('@')[0]
+      }; 
+    }
+    return { ...seat, status: 'AVAILABLE' };
   });
 
   const myTicket = myActiveTickets.find(res => res.endTime >= currentTimeString && res.status !== 'RETURNED');
 
-  // 🔥 [버그 수정 1] 본인에게 해당되는 알림만 완벽하게 필터링하도록 로직 대폭 강화
+  // 팀원 신고 및 소명 알림 로직
   useEffect(() => {
     if (!user) return;
+    const currentId = user.email?.split('@')[0];
+    const isAdminUser = ['pjy', 'admin', 'manager', '1111111', '관리자'].includes(currentId);
+
     const unsub = onSnapshot(collection(db, 'Log'), (snap) => {
-      const myId = user.email ? user.email.split('@')[0] : '';
-      const logs = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }))
-        .filter(log => {
-          const logUid = log.uid ? String(log.uid).split('@')[0] : '';
-          const logStuNo = log.studentNo ? String(log.studentNo) : '';
-          const isMyLog = (myId && logUid === myId) || (myId && logStuNo === myId);
-          return isMyLog || (isAdmin && log.action === 'USER_REPORTED');
-        })
-        .sort((a, b) => ((b.timestamp || b.createdAt)?.toDate?.().getTime() || 0) - ((a.timestamp || a.createdAt)?.toDate?.().getTime() || 0));
-      setNotifications(logs);
+      const logs = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      const filtered = logs.filter(log => {
+        const isMe = log.uid === user.email || log.studentNo === currentId;
+        const isPending = log.reportStatus === 'PENDING' || log.action === 'USER_REPORTED';
+        const isProcessing = log.reportStatus === 'PROCESSING' || log.action === 'ADMIN_PENALTY';
+        const isAdminNotification = isAdminUser && (isPending || (isProcessing && log.appealText));
+        return isMe || isAdminNotification;
+      });
+      setNotifications(filtered);
     });
     return () => unsub();
-  }, [user, isAdmin]);
+  }, [user]);
 
-  // 🔥 [추가 1] 관리자용 대기 중인 신고 개수 파악
   const pendingReportsCount = isAdmin ? notifications.filter(n => n.action === 'USER_REPORTED').length : 0;
 
-  // 🔥 [버그 수정 2] 당사자에게 '신고 접수됨' 또는 '패널티 조치됨' 팝업을 즉시 띄움
   useEffect(() => {
-    if (!user || notifications.length === 0) return;
-    if (isAdmin) return; // 관리자는 팝업 차단
+    if (!user || isAdmin || notifications.length === 0) return; 
+    if (penaltyAlert && penaltyAlert.id === 'test_123') return;
 
-    const readPenalties = JSON.parse(localStorage.getItem(`read_penalties_${user.email}`) || '[]');
     const myId = user.email.split('@')[0];
-    
-    const unreadAlert = notifications.find(n => {
-      const logUid = n.uid ? String(n.uid).split('@')[0] : '';
-      const logStuNo = n.studentNo ? String(n.studentNo) : '';
-      const isTargetUser = (myId && logUid === myId) || (myId && logStuNo === myId);
-      const isAlertAction = n.action === 'ADMIN_PENALTY' || n.action === 'USER_REPORTED';
-      
-      return isAlertAction && isTargetUser && !readPenalties.includes(n.id);
-    });
-    
-    if (unreadAlert) {
+    const readKey = `read_penalties_${myId}`;
+    const readPenalties = JSON.parse(localStorage.getItem(readKey) || '[]');
+
+    const unreadAlert = notifications.find(n => n.action === 'ADMIN_PENALTY' && !readPenalties.includes(n.id));
+    if (unreadAlert && (!penaltyAlert || penaltyAlert.id !== unreadAlert.id)) {
       setPenaltyAlert(unreadAlert);
     }
-  }, [notifications, user, isAdmin]);
+  }, [notifications, user, isAdmin, penaltyAlert]);
 
   const handleDismissPenalty = () => {
     if (!penaltyAlert) return;
-    const readPenalties = JSON.parse(localStorage.getItem(`read_penalties_${user.email}`) || '[]');
-    readPenalties.push(penaltyAlert.id);
-    localStorage.setItem(`read_penalties_${user.email}`, JSON.stringify(readPenalties));
+    const myId = user.email.split('@')[0];
+    const readKey = `read_penalties_${myId}`;
+    const readPenalties = JSON.parse(localStorage.getItem(readKey) || '[]');
+    
+    if (penaltyAlert.id !== 'test_123') {
+      readPenalties.push(penaltyAlert.id);
+      localStorage.setItem(readKey, JSON.stringify(readPenalties));
+    }
     setPenaltyAlert(null);
   };
 
@@ -192,12 +232,27 @@ function App() {
     }
   };
 
+  const openQRModal = () => { setTimeLeft(15); setShowSeatQR(true); };
+
   useEffect(() => {
     let timer;
-    if (showSeatQR && timeLeft > 0) timer = setInterval(() => setTimeLeft(p => p - 1), 1000);
-    else if (timeLeft === 0) { setShowSeatQR(false); alert("⌛ QR 코드가 만료되었습니다."); }
+    if (showSeatQR) timer = setInterval(() => setTimeLeft((prev) => prev - 1), 1000);
     return () => clearInterval(timer);
-  }, [showSeatQR, timeLeft]);
+  }, [showSeatQR]);
+
+  useEffect(() => {
+    if (showSeatQR && timeLeft <= 0) {
+      setShowSeatQR(false);
+      setTimeout(() => alert("⌛ QR 코드가 만료되었습니다. 다시 시도해주세요."), 50);
+    }
+  }, [timeLeft, showSeatQR]);
+
+  useEffect(() => {
+    if (showSeatQR && myTicket && myTicket.status === 'OCCUPIED') {
+      setShowSeatQR(false);
+      alert("✅ 관리자 스캐너 인증이 완료되었습니다. (입실 완료)");
+    }
+  }, [myTicket, showSeatQR]);
 
   const handleCheckIn = async () => {
     if (currentTimeString < myTicket.startTime) return alert("🚨 아직 예약 시간이 되지 않았습니다!");
@@ -205,17 +260,17 @@ function App() {
       await updateDoc(doc(db, "Reservations", myTicket.id), { status: "OCCUPIED" });
       await addDoc(collection(db, "Log"), { action: "CHECK_IN", seatId: myTicket.seatId, uid: user.email, createdAt: serverTimestamp() });
       setShowSeatQR(false); 
-      alert("✅ QR 인증이 완료되었습니다! 입실 처리되었습니다.");
-    } catch (e) { alert("오류가 발생했습니다."); }
+      alert("✅ 입실 처리되었습니다.");
+    } catch (e) { alert("오류 발생"); }
   };
 
   const handleCheckout = async () => {
-    if(!window.confirm("정말 퇴실하시겠습니까? 남은 시간은 소멸됩니다.")) return;
+    if(!window.confirm("정말 퇴실하시겠습니까? 남은 이용 시간은 모두 소멸됩니다.")) return;
     try {
       await updateDoc(doc(db, "Reservations", myTicket.id), { status: "RETURNED" });
       await addDoc(collection(db, "Log"), { action: "RETURN", seatId: myTicket.seatId, uid: user.email, usedMinutes: 60, createdAt: serverTimestamp() });
       alert("👋 정상적으로 퇴실 처리되었습니다.");
-    } catch (e) { alert("오류가 발생했습니다."); }
+    } catch (e) { alert("오류 발생"); }
   };
 
   const handleCancel = async () => {
@@ -224,17 +279,46 @@ function App() {
       await deleteDoc(doc(db, "Reservations", myTicket.id));
       await addDoc(collection(db, "Log"), { action: "CANCEL", seatId: myTicket.seatId, uid: user.email, createdAt: serverTimestamp() });
       alert("🗑️ 예약이 취소되었습니다.");
-    } catch (e) { alert("오류가 발생했습니다."); }
+    } catch (e) { alert("오류 발생"); }
   };
 
-  const handleStartTimeChange = (e) => {
-    const newStart = e.target.value;
-    setStartTime(newStart);
-    if (newStart >= endTime) {
-      const startIdx = timeOptions.indexOf(newStart);
-      if (startIdx < timeOptions.length - 1) {
-        setEndTime(timeOptions[startIdx + 1]);
-      }
+  const handleStartTimeChange = (val) => {
+    setStartTime(val);
+    if (val >= endTime) {
+      const startIdx = timeOptions.indexOf(val);
+      if (startIdx < timeOptions.length - 1) setEndTime(timeOptions[startIdx + 1]);
+    }
+  };
+
+  // 🚀 상열님 핵심 기능 1: 도면 좌석 폭/높이 저장
+  const handleUpdateSeats = async (updatedSeats) => {
+    try {
+      const batch = writeBatch(db);
+      updatedSeats.forEach(seat => {
+        const seatRef = doc(db, "Seat", seat.id); 
+        batch.set(seatRef, { 
+          x: seat.x, 
+          y: seat.y, 
+          label: seat.label,
+          width: seat.width ?? 80,   
+          height: seat.height ?? 70  
+        }, { merge: true });
+      });
+      await batch.commit();
+      console.log("✅ DB에 좌표 및 사이즈 저장 완료!");
+    } catch (error) {
+      console.error("❌ DB 저장 실패:", error);
+      throw error; 
+    }
+  };
+
+  // 🚀 상열님 핵심 기능 2: 좌석 삭제
+  const handleDeleteSeat = async (seatId) => {
+    try {
+      await deleteDoc(doc(db, "Seat", seatId));
+      console.log(`✅ 좌석(${seatId}) DB 삭제 완료`);
+    } catch (error) {
+      alert("좌석 삭제 중 오류가 발생했습니다.");
     }
   };
 
@@ -252,11 +336,10 @@ function App() {
         ))}
         {calendarDays.map((day, i) => {
           const isSelected = isSameDay(day, selectedDate);
-          const isToday = isSameDay(day, new Date());
           const isCurrentMonth = isSameMonth(day, monthStart);
           const isDisabled = isPast(day) && !isSameDay(day, new Date());
           return (
-            <button key={i} disabled={isDisabled} onClick={() => { setSelectedDate(startOfDay(day)); setShowFullCalendar(false); }} style={{ aspectRatio: '1', border: 'none', borderRadius: '12px', cursor: isDisabled ? 'default' : 'pointer', background: isSelected ? '#2563eb' : 'transparent', color: isSelected ? '#fff' : isDisabled ? '#cbd5e1' : !isCurrentMonth ? '#94a3b8' : '#000000', fontWeight: isSelected ? '900' : '700', fontSize: '1rem', position: 'relative' }}>
+            <button key={i} disabled={isDisabled} onClick={() => { setSelectedDate(startOfDay(day)); setShowFullCalendar(false); }} style={{ aspectRatio: '1', border: 'none', borderRadius: '12px', cursor: isDisabled ? 'default' : 'pointer', background: isSelected ? '#2563eb' : 'transparent', color: isSelected ? '#fff' : isDisabled ? '#cbd5e1' : !isCurrentMonth ? '#94a3b8' : '#000000', fontWeight: isSelected ? '900' : '700', fontSize: '1rem' }}>
               {format(day, 'd')}
             </button>
           );
@@ -270,8 +353,8 @@ function App() {
       <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh', background: '#f8fafc' }}>
         {systemSettings?.isExamActive && (
           <div style={{ background: '#ef4444', color: '#fff', padding: '15px 20px', textAlign: 'center', fontWeight: '900', fontSize: '1rem', zIndex: 9999 }}>
-            🚨 [시험기간 특별 통제] 현재 예약 및 출입이 엄격히 제한됩니다.<br/>
-            <span style={{ fontSize: '0.85rem', opacity: 0.9 }}>적용 기간: {systemSettings.examStartDate?.replace('T', ' ')} ~ {systemSettings.examEndDate?.replace('T', ' ')}</span>
+            🚨 [시험기간 특별 통제] 현재 예약 및 출입이 제한됩니다.<br/>
+            <span style={{ fontSize: '0.85rem', opacity: 0.9 }}>기간: {systemSettings.examStartDate?.replace('T', ' ')} ~ {systemSettings.examEndDate?.replace('T', ' ')}</span>
           </div>
         )}
         <Auth />
@@ -284,61 +367,69 @@ function App() {
   return (
     <div style={{ padding: isSmallMobile ? '10px' : '20px', width: '100%', maxWidth: '1300px', margin: '0 auto', boxSizing: 'border-box', fontFamily: 'sans-serif', background: '#f8fafc', minHeight: '100vh', position: 'relative', paddingBottom: myTicket && viewMode === 'MAP' ? '180px' : '30px' }}>
       
-      {/* 🔥 [변경] 신고 접수(USER_REPORTED)와 조치 결과(ADMIN_PENALTY) 상황에 맞게 텍스트 동적 변경 */}
-      {penaltyAlert && (
-        <div style={{ position: 'fixed', top: 0, left: 0, width: '100%', height: '100%', background: 'rgba(0, 0, 0, 0.85)', zIndex: 999999, display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '20px', boxSizing: 'border-box' }}>
-          <div style={{ background: '#fff', padding: '40px 30px', borderRadius: '24px', width: '100%', maxWidth: '400px', textAlign: 'center', boxShadow: '0 20px 50px rgba(0,0,0,0.5)' }}>
-            <div style={{ fontSize: '3.5rem', marginBottom: '10px' }}>🚨</div>
-            <h2 style={{ margin: '0 0 15px 0', color: '#dc2626', fontWeight: '900', fontSize: '1.6rem' }}>
-              {penaltyAlert.action === 'ADMIN_PENALTY' ? '도서관 이용 제한 안내' : '도서관 이용 경고 안내'}
-            </h2>
-            <p style={{ color: '#475569', fontSize: '0.95rem', fontWeight: '700', marginBottom: '25px', lineHeight: '1.5' }}>
-              {penaltyAlert.action === 'ADMIN_PENALTY' 
-                ? <React.Fragment>타 사용자의 신고 접수에 따라<br/>관리자 조치가 취해졌습니다.</React.Fragment>
-                : <React.Fragment>타 사용자에 의해 이용 수칙 위반으로<br/>신고가 접수되었습니다.</React.Fragment>}
-            </p>
-            <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '12px', padding: '20px', textAlign: 'left', marginBottom: '30px' }}>
-              <p style={{ margin: '0 0 10px 0', fontSize: '0.9rem', color: '#7f1d1d', fontWeight: '800' }}>📌 발생 좌석: <span style={{ color: '#dc2626', fontWeight: '900' }}>{penaltyAlert.seatLabel}</span></p>
-              <p style={{ margin: 0, fontSize: '0.9rem', color: '#7f1d1d', fontWeight: '800', lineHeight: '1.5' }}>📌 사유 및 내용:<br/><span style={{ color: '#dc2626', fontWeight: '900' }}>{penaltyAlert.result}</span></p>
+      {!isAdmin && (
+        <button 
+          onClick={() => setPenaltyAlert({ id: 'test_123', action: 'USER_REPORTED', seatLabel: '테스트 좌석', result: '[단순 노쇼] 1시간 이상 자리를 비웠습니다.' })}
+          style={{ position: 'fixed', bottom: '130px', right: '20px', background: '#f59e0b', color: '#fff', border: 'none', borderRadius: '50px', fontWeight: '900', fontSize: '1rem', padding: '15px 20px', cursor: 'pointer', zIndex: 50000, boxShadow: '0 4px 10px rgba(0,0,0,0.3)' }}>
+          🚨 소명 팝업 테스트
+        </button>
+      )}
+
+      {showSeatQR && (
+        <div style={{ position: 'fixed', top: 0, left: 0, width: '100%', height: '100%', background: 'rgba(15, 23, 42, 0.85)', zIndex: 100000, display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '20px', boxSizing: 'border-box' }}>
+          <div style={{ background: '#fff', padding: '40px', borderRadius: '24px', textAlign: 'center', boxShadow: '0 20px 40px rgba(0,0,0,0.3)', width: '100%', maxWidth: '350px' }}>
+            <h3 style={{ margin: '0 0 10px 0', fontSize: '1.5rem', fontWeight: '900', color: '#0f172a' }}>📱 QR 입실 인증</h3>
+            <p style={{ margin: '0 0 20px 0', fontSize: '0.9rem', color: '#64748b', fontWeight: '700' }}>관리자 스캐너에 화면을 보여주세요</p>
+            <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '20px' }}>
+              <QRCodeGen studentId={user?.email?.split('@')[0]} />
             </div>
-            <button onClick={handleDismissPenalty} style={{ width: '100%', padding: '18px', background: '#dc2626', color: '#fff', border: 'none', borderRadius: '14px', fontWeight: '900', fontSize: '1.1rem', cursor: 'pointer', boxShadow: '0 8px 20px rgba(220, 38, 38, 0.3)' }}>
-              내용을 확인했습니다
-            </button>
+            <div style={{ background: '#fef2f2', padding: '10px', borderRadius: '12px', marginBottom: '25px', display: 'inline-block' }}>
+              <p style={{ margin: 0, fontSize: '1.1rem', fontWeight: '900', color: '#dc2626' }}>남은 시간: {timeLeft}초</p>
+            </div>
+            <button onClick={() => setShowSeatQR(false)} style={{ width: '100%', padding: '16px', background: '#f1f5f9', color: '#475569', border: 'none', borderRadius: '14px', fontWeight: '900', cursor: 'pointer' }}>닫기</button>
           </div>
         </div>
       )}
 
+      <PenaltyAppealModal penaltyAlert={penaltyAlert} onDismiss={handleDismissPenalty} userEmail={user?.email} />
+
       <header style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', marginBottom: '20px', background: '#fff', padding: '15px 25px', borderRadius: '20px', boxShadow: '0 4px 15px rgba(0,0,0,0.05)', width: '100%', boxSizing: 'border-box', justifyContent: 'space-between', alignItems: 'center', gap: '15px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '20px', width: isMobile ? '100%' : 'auto', justifyContent: isMobile ? 'center' : 'flex-start' }}>
-          <h2 style={{ margin: 0, color: '#0f172a', fontWeight: '900', fontSize: '1.5rem', whiteSpace: 'nowrap' }}>📚 스마트 도서관</h2>
+          <h2 onClick={() => setViewMode('MAP')} style={{ margin: 0, color: '#0f172a', fontWeight: '900', fontSize: '1.5rem', whiteSpace: 'nowrap', cursor: 'pointer' }} title="메인 화면으로 이동">📚 스마트 도서관</h2>
           {isAdmin && !isMobile && (
             <div style={{ display: 'flex', background: '#f1f5f9', borderRadius: '10px', padding: '4px', gap: '2px' }}>
               <button onClick={() => setViewMode('MAP')} style={{ padding: '8px 16px', background: viewMode === 'MAP' ? '#2563eb' : 'transparent', color: viewMode === 'MAP' ? '#fff' : '#475569', border: 'none', borderRadius: '8px', fontWeight: '900', cursor: 'pointer', fontSize: '0.9rem', whiteSpace: 'nowrap', transition: '0.2s' }}>배치도</button>
-              
-              {/* 🔥 [추가 2] 데스크탑 관리자 '회원관리' 버튼 빨간 점 */}
               <button onClick={() => setViewMode('USERS')} style={{ position: 'relative', padding: '8px 16px', background: viewMode === 'USERS' ? '#2563eb' : 'transparent', color: viewMode === 'USERS' ? '#fff' : '#475569', border: 'none', borderRadius: '8px', fontWeight: '900', cursor: 'pointer', fontSize: '0.9rem', whiteSpace: 'nowrap', transition: '0.2s' }}>
                 회원관리
-                {pendingReportsCount > 0 && <span style={{ position: 'absolute', top: '-4px', right: '-4px', width: '10px', height: '10px', background: '#ef4444', borderRadius: '50%', border: '2px solid #fff' }}></span>}
+                {notifications.some(n => {
+                  const isPending = n.reportStatus === 'PENDING' || n.action === 'USER_REPORTED';
+                  const isProcessing = n.reportStatus === 'PROCESSING' || n.action === 'ADMIN_PENALTY';
+                  return isPending || (isProcessing && n.appealText);
+                }) && (
+                  <span style={{ position: 'absolute', top: '-4px', right: '-4px', width: '10px', height: '10px', background: '#ef4444', borderRadius: '50%', border: '2px solid #fff' }}></span>
+                )}
               </button>
-
               <button onClick={() => setViewMode('SCANNER')} style={{ padding: '8px 16px', background: viewMode === 'SCANNER' ? '#2563eb' : 'transparent', color: viewMode === 'SCANNER' ? '#fff' : '#475569', border: 'none', borderRadius: '8px', fontWeight: '900', cursor: 'pointer', fontSize: '0.9rem', whiteSpace: 'nowrap', transition: '0.2s' }}>입구 스캐너</button>
+              <button onClick={() => setViewMode('EVENTS_ADMIN')} style={{ padding: '8px 16px', background: viewMode === 'EVENTS_ADMIN' ? '#16a34a' : 'transparent', color: viewMode === 'EVENTS_ADMIN' ? '#fff' : '#475569', border: 'none', borderRadius: '8px', fontWeight: '900', cursor: 'pointer', fontSize: '0.9rem', whiteSpace: 'nowrap', transition: '0.2s' }}>이벤트관리</button>
             </div>
           )}
         </div>
         {isAdmin && isMobile && (
-          <div style={{ display: 'flex', background: '#f1f5f9', borderRadius: '10px', padding: '4px', gap: '4px', width: '100%' }}>
-            <button onClick={() => setViewMode('MAP')} style={{ flex: 1, padding: '10px 0', background: viewMode === 'MAP' ? '#2563eb' : 'transparent', color: viewMode === 'MAP' ? '#fff' : '#475569', border: 'none', borderRadius: '8px', fontWeight: '900', cursor: 'pointer', fontSize: '0.9rem' }}>배치도</button>
-            
-            {/* 🔥 [추가 2] 모바일 관리자 '회원관리' 버튼 빨간 점 */}
-            <button onClick={() => setViewMode('USERS')} style={{ position: 'relative', flex: 1, padding: '10px 0', background: viewMode === 'USERS' ? '#2563eb' : 'transparent', color: viewMode === 'USERS' ? '#fff' : '#475569', border: 'none', borderRadius: '8px', fontWeight: '900', cursor: 'pointer', fontSize: '0.9rem' }}>
-              회원관리
-              {pendingReportsCount > 0 && <span style={{ position: 'absolute', top: '4px', right: 'calc(50% - 35px)', width: '10px', height: '10px', background: '#ef4444', borderRadius: '50%', border: '2px solid #fff' }}></span>}
+          <div style={{ display: 'flex', background: '#f1f5f9', borderRadius: '10px', padding: '4px', gap: '4px', width: '100%', flexWrap: 'wrap' }}>
+            <button onClick={() => setViewMode('MAP')} style={{ flex: 1, padding: '10px 0', background: viewMode === 'MAP' ? '#2563eb' : 'transparent', color: viewMode === 'MAP' ? '#fff' : '#475569', border: 'none', borderRadius: '8px', fontWeight: '900', cursor: 'pointer', fontSize: '0.85rem' }}>배치도</button>
+            <button onClick={() => setViewMode('USERS')} style={{ position: 'relative', flex: 1, padding: '10px 0', background: viewMode === 'USERS' ? '#2563eb' : 'transparent', color: viewMode === 'USERS' ? '#fff' : '#475569', border: 'none', borderRadius: '8px', fontWeight: '900', cursor: 'pointer', fontSize: '0.85rem' }}>
+              회원
+              {notifications.some(n => {
+                  const isPending = n.reportStatus === 'PENDING' || n.action === 'USER_REPORTED';
+                  const isProcessing = n.reportStatus === 'PROCESSING' || n.action === 'ADMIN_PENALTY';
+                  return isPending || (isProcessing && n.appealText);
+                }) && <span style={{ position: 'absolute', top: '4px', right: '8px', width: '8px', height: '8px', background: '#ef4444', borderRadius: '50%', border: '2px solid #fff' }}></span>}
             </button>
-
-            <button onClick={() => setViewMode('SCANNER')} style={{ flex: 1, padding: '10px 0', background: viewMode === 'SCANNER' ? '#2563eb' : 'transparent', color: viewMode === 'SCANNER' ? '#fff' : '#475569', border: 'none', borderRadius: '8px', fontWeight: '900', cursor: 'pointer', fontSize: '0.9rem' }}>입구 스캐너</button>
+            <button onClick={() => setViewMode('SCANNER')} style={{ flex: 1, padding: '10px 0', background: viewMode === 'SCANNER' ? '#2563eb' : 'transparent', color: viewMode === 'SCANNER' ? '#fff' : '#475569', border: 'none', borderRadius: '8px', fontWeight: '900', cursor: 'pointer', fontSize: '0.85rem' }}>스캐너</button>
+            <button onClick={() => setViewMode('EVENTS_ADMIN')} style={{ flex: 1, padding: '10px 0', background: viewMode === 'EVENTS_ADMIN' ? '#16a34a' : 'transparent', color: viewMode === 'EVENTS_ADMIN' ? '#fff' : '#475569', border: 'none', borderRadius: '8px', fontWeight: '900', cursor: 'pointer', fontSize: '0.85rem' }}>이벤트</button>
           </div>
         )}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, justifyContent: isMobile ? 'center' : 'flex-end', width: isMobile ? '100%' : 'auto' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, justifyContent: isMobile ? 'center' : 'flex-end', width: isMobile ? '100%' : 'auto', flexWrap: 'wrap' }}>
           <p style={{ margin: 0, fontWeight: '900', color: '#475569', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>👤 {user?.email?.split('@')[0]}님</p>
           
           <div style={{ position: 'relative' }}>
@@ -351,7 +442,14 @@ function App() {
                 <div style={{ padding: '15px', background: '#f8fafc', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}><h4 style={{ margin: 0, fontSize: '0.95rem', fontWeight: '900' }}>새로운 알림</h4><span style={{ fontSize: '0.8rem', cursor: 'pointer', fontWeight: '700' }} onClick={() => setShowNotifications(false)}>닫기 ✕</span></div>
                 <div style={{ maxHeight: '300px', overflowY: 'auto', padding: '10px' }}>
                   {notifications.length === 0 ? <p style={{ textAlign: 'center', color: '#94a3b8', fontSize: '0.85rem', padding: '20px 0', margin: 0, fontWeight: '700' }}>새로운 알림이 없습니다.</p> : notifications.map(noti => (
-                    <div key={noti.id} style={{ padding: '10px', borderBottom: '1px solid #f1f5f9', background: ((noti.timestamp || noti.createdAt)?.toDate?.().getTime() || 0) > lastReadTime ? '#eff6ff' : 'transparent', borderRadius: '8px' }}>
+                    <div key={noti.id} 
+                      onClick={() => {
+                        if (noti.action === 'USER_REPORTED' || noti.action === 'ADMIN_PENALTY') {
+                          setPenaltyAlert(noti);
+                          setShowNotifications(false);
+                        }
+                      }}
+                      style={{ padding: '10px', borderBottom: '1px solid #f1f5f9', background: ((noti.timestamp || noti.createdAt)?.toDate?.().getTime() || 0) > lastReadTime ? '#eff6ff' : 'transparent', borderRadius: '8px', cursor: (noti.action === 'USER_REPORTED' || noti.action === 'ADMIN_PENALTY') ? 'pointer' : 'default' }}>
                       <div style={{ fontSize: '0.85rem', color: '#334155', fontWeight: '700', marginBottom: '4px' }}>
                         {noti.action === 'ADMIN_PENALTY' ? `🚨 [패널티 조치] 사유: ${noti.result}` : (noti.action === 'USER_REPORTED' && isAdmin ? `🚨 [신고 접수] ${noti.seatLabel} - 사유: ${noti.result || '알 수 없음'}` : getNotificationText(noti.action, noti.seatLabel))}
                       </div>
@@ -362,6 +460,9 @@ function App() {
               </div>
             )}
           </div>
+
+          <button onClick={() => setViewMode('EVENTS')} style={{ background: viewMode === 'EVENTS' || viewMode === 'EVENT_DETAIL' ? '#2563eb' : '#f1f5f9', color: viewMode === 'EVENTS' || viewMode === 'EVENT_DETAIL' ? '#fff' : '#334155', border: 'none', borderRadius: '10px', fontWeight: '900', fontSize: '0.8rem', padding: '8px 14px', cursor: 'pointer', whiteSpace: 'nowrap', transition: '0.2s' }}>이벤트</button>
+          <button onClick={() => setViewMode('RANKING')} style={{ background: viewMode === 'RANKING' ? '#f59e0b' : '#f1f5f9', color: viewMode === 'RANKING' ? '#fff' : '#334155', border: 'none', borderRadius: '10px', fontWeight: '900', fontSize: '0.8rem', padding: '8px 14px', cursor: 'pointer', whiteSpace: 'nowrap', transition: '0.2s', marginRight: '6px' }}>이용자 순위</button>
           <button onClick={() => setViewMode(viewMode === 'MYPAGE' ? 'MAP' : 'MYPAGE')} style={{ background: viewMode === 'MYPAGE' ? '#2563eb' : '#f1f5f9', color: viewMode === 'MYPAGE' ? '#fff' : '#334155', border: 'none', borderRadius: '10px', fontWeight: '900', fontSize: '0.8rem', padding: '8px 14px', cursor: 'pointer', whiteSpace: 'nowrap', transition: '0.2s' }}>{viewMode === 'MYPAGE' ? '배치도' : '마이페이지'}</button>
           <button onClick={async () => { if (window.confirm("로그아웃 하시겠습니까?")) await signOut(auth); }} style={{ background: '#fee2e2', color: '#dc2626', border: 'none', borderRadius: '10px', fontWeight: '900', fontSize: '0.8rem', padding: '8px 14px', cursor: 'pointer', whiteSpace: 'nowrap', transition: '0.2s' }}>로그아웃</button>
         </div>
@@ -370,9 +471,18 @@ function App() {
       {isAdmin && viewMode === 'USERS' && <AdminDashboard />}
       {viewMode === 'MYPAGE' && <MyPage user={user} setViewMode={setViewMode} />}
       {viewMode === 'SCANNER' && isAdmin && <ScannerPage setViewMode={setViewMode} />}
+      
+      {/* 🚀 팀원 컴포넌트 마운트 */}
+      {viewMode === 'RANKING' && <RankingPage onBack={() => setViewMode('MAP')} user={user}/>}
+      {viewMode === 'EVENTS' && <EventBoard onBack={() => setViewMode('MAP')} onSelectEvent={(ev) => { setSelectedEvent(ev); setViewMode('EVENT_DETAIL'); }} />}
+      {viewMode === 'EVENT_DETAIL' && <EventDetail event={selectedEvent} onBack={() => setViewMode('EVENTS')} />}
+      {viewMode === 'EVENTS_ADMIN' && isAdmin && <AdminEvents />}
 
       {viewMode === 'MAP' && (
         <>
+          {showRankingBanner && <RankingBanner onEnter={() => setViewMode('RANKING')} onClose={() => setShowRankingBanner(false)} />}
+          <EventBanner onSeeAll={() => setViewMode('EVENTS')} onSelectEvent={(ev) => { setSelectedEvent(ev); setViewMode('EVENT_DETAIL'); }} />
+
           <div className="date-scroll-container" style={{ display: 'flex', flexWrap: 'nowrap', gap: '8px', marginBottom: '20px', overflowX: 'auto', paddingBottom: '10px', width: '100%', boxSizing: 'border-box' }}>
             {weekDays.map((date, idx) => (
               <button key={idx} onClick={() => setSelectedDate(startOfDay(date))} style={{ flex: '1 0 70px', minWidth: '70px', padding: '12px 5px', borderRadius: '15px', border: 'none', background: format(selectedDate, 'yyMMdd') === format(date, 'yyMMdd') ? '#2563eb' : '#fff', color: format(selectedDate, 'yyMMdd') === format(date, 'yyMMdd') ? '#fff' : '#475569', boxShadow: '0 2px 5px rgba(0,0,0,0.05)', cursor: 'pointer', textAlign: 'center', transition: 'all 0.2s ease', transform: format(selectedDate, 'yyMMdd') === format(date, 'yyMMdd') ? 'scale(1.05)' : 'scale(1)' }}>
@@ -384,15 +494,35 @@ function App() {
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '15px', marginBottom: '25px', background: '#fff', padding: '20px', borderRadius: '20px', boxShadow: '0 4px 10px rgba(0,0,0,0.05)', boxSizing: 'border-box' }}>
-            <div><label style={{ display: 'block', marginBottom: '8px', fontSize: '0.85rem', fontWeight: '800', color: '#475569' }}>시작 시간</label><select value={startTime} onChange={handleStartTimeChange} style={{ width: '100%', padding: '14px', borderRadius: '12px', border: '2px solid #e2e8f0', background: '#ffffff', color: '#0f172a', fontWeight: '800', cursor: 'pointer', outline: 'none' }}>{timeOptions.slice(0, -1).map(t => <option key={t} value={t}>{t}</option>)}</select></div>
-            <div><label style={{ display: 'block', marginBottom: '8px', fontSize: '0.85rem', fontWeight: '800', color: '#475569' }}>종료 시간</label><select value={endTime} onChange={(e) => setEndTime(e.target.value)} style={{ width: '100%', padding: '14px', borderRadius: '12px', border: '2px solid #e2e8f0', background: '#ffffff', color: '#0f172a', fontWeight: '800', cursor: 'pointer', outline: 'none' }}>{timeOptions.map(t => <option key={t} value={t} disabled={t <= startTime}>{t}</option>)}</select></div>
+            <div style={{ position: 'relative' }}>
+              <label style={{ display: 'block', marginBottom: '8px', fontSize: '0.85rem', fontWeight: '800', color: '#475569' }}>시작 시간</label>
+              <button onClick={() => { setIsStartOpen(!isStartOpen); setIsEndOpen(false); }} style={{ width: '100%', padding: '14px', borderRadius: '12px', border: '2px solid #e2e8f0', background: '#ffffff', color: '#0f172a', fontWeight: '800', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>{startTime} <span>▼</span></button>
+              {isStartOpen && (<div style={{ position: 'absolute', top: 'calc(100% + 5px)', left: 0, width: '100%', maxHeight: '220px', overflowY: 'auto', background: '#fff', border: '1px solid #cbd5e1', borderRadius: '12px', zIndex: 10 }}>{timeOptions.slice(0, -1).map(t => (<div key={t} onClick={() => { handleStartTimeChange(t); setIsStartOpen(false); }} style={{ padding: '12px 15px', cursor: 'pointer', fontWeight: '800', background: t === startTime ? '#eff6ff' : '#fff' }}>{t}</div>))}</div>)}
+            </div>
+            <div style={{ position: 'relative' }}>
+              <label style={{ display: 'block', marginBottom: '8px', fontSize: '0.85rem', fontWeight: '800', color: '#475569' }}>종료 시간</label>
+              <button onClick={() => { setIsEndOpen(!isEndOpen); setIsStartOpen(false); }} style={{ width: '100%', padding: '14px', borderRadius: '12px', border: '2px solid #e2e8f0', background: '#ffffff', color: '#0f172a', fontWeight: '800', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>{endTime} <span>▼</span></button>
+              {isEndOpen && (<div style={{ position: 'absolute', top: 'calc(100% + 5px)', left: 0, width: '100%', maxHeight: '220px', overflowY: 'auto', background: '#fff', border: '1px solid #cbd5e1', borderRadius: '12px', zIndex: 10 }}>{timeOptions.map(t => {const isDisabled = t <= startTime; return (<div key={t} onClick={() => { if(!isDisabled) { setEndTime(t); setIsEndOpen(false); } }} style={{ padding: '12px 15px', cursor: isDisabled ? 'not-allowed' : 'pointer', fontWeight: '800', color: isDisabled ? '#cbd5e1' : '#475569', background: t === endTime ? '#eff6ff' : '#fff', opacity: isDisabled ? 0.6 : 1 }}>{t}</div>);})}</div>)}
+            </div>
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px', marginBottom: '15px', width: '100%' }}>
             {['1층', '2층', '4층'].map(floor => (<button key={floor} onClick={() => setActiveFloor(floor)} style={{ width: '100%', padding: '14px 0', borderRadius: '15px', border: 'none', background: activeFloor === floor ? '#1e293b' : '#fff', color: activeFloor === floor ? '#fff' : '#64748b', fontWeight: '900', fontSize: '1rem', cursor: 'pointer' }}>{floor}</button>))}
           </div>
 
-          <FloorMap activeFloor={activeFloor} title={floorTitles[activeFloor]} seats={displaySeats} user={user} isAdmin={isAdmin} currentUserData={currentUserData} viewMode={viewMode} setSelectedSeat={setSelectedSeat} />
+          {/* 🚀 상열님 코어 기능인 FloorMap 연결 (width, height 저장 및 delete 통로 확보) */}
+          <FloorMap 
+            activeFloor={activeFloor} 
+            title={floorTitles[activeFloor]} 
+            seats={displaySeats} 
+            user={user} 
+            isAdmin={isAdmin} 
+            currentUserData={currentUserData} 
+            viewMode={viewMode} 
+            setSelectedSeat={setSelectedSeat} 
+            onUpdateSeats={handleUpdateSeats}
+            onDeleteSeat={handleDeleteSeat} 
+          />
           
           <SeatModal selectedSeat={selectedSeat} setSelectedSeat={setSelectedSeat} user={user} isAdmin={isAdmin} selectedDate={selectedDate} setSelectedDate={setSelectedDate} startTime={startTime} endTime={endTime} showFullCalendar={showFullCalendar} setShowFullCalendar={setShowFullCalendar} />
 
@@ -417,7 +547,7 @@ function App() {
                 <div style={{ textAlign: 'right' }}><p style={{ margin: 0, color: '#64748b', fontSize: '0.9rem' }}>이용 시간</p><p style={{ margin: 0, color: '#2563eb', fontSize: '1.1rem', fontWeight: '900' }}>{myTicket.startTime} ~ {myTicket.endTime}</p></div>
               </div>
               <div style={{ display: 'flex', gap: '10px', marginTop: '20px' }}>
-                {myTicket.status !== 'OCCUPIED' ? (<><button onClick={() => setShowSeatQR(true)} style={{ flex: 2, padding: '16px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: '14px', fontWeight: '900' }}>QR 인증하기</button><button onClick={handleCancel} style={{ flex: 1, padding: '16px', background: '#fee2e2', color: '#dc2626', border: 'none', borderRadius: '14px', fontWeight: '900' }}>취소</button></>) : (<button onClick={handleCheckout} style={{ width: '100%', padding: '16px', background: '#475569', color: '#fff', border: 'none', borderRadius: '14px', fontWeight: '900' }}>퇴실하기</button>)}
+                {myTicket.status !== 'OCCUPIED' ? (<><button onClick={openQRModal} style={{ flex: 2, padding: '16px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: '14px', fontWeight: '900', cursor: 'pointer' }}>QR 인증하기</button><button onClick={handleCancel} style={{ flex: 1, padding: '16px', background: '#fee2e2', color: '#dc2626', border: 'none', borderRadius: '14px', fontWeight: '900', cursor: 'pointer' }}>취소</button></>) : (<button onClick={handleCheckout} style={{ width: '100%', padding: '16px', background: '#475569', color: '#fff', border: 'none', borderRadius: '14px', fontWeight: '900', cursor: 'pointer' }}>퇴실하기</button>)}
               </div>
             </div>
           )}
@@ -426,5 +556,3 @@ function App() {
     </div>
   );
 }
-
-export default App;
