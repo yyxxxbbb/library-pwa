@@ -77,7 +77,7 @@ const Auth = ({ isExamPeriod }) => {
             }} 
             style={{ margin: 0, padding: 0 }}
           >
-            <input type="text" placeholder="이메일 (기존 유저는 학번)" onChange={e => setLoginId(e.target.value)} style={inputStyle} />
+            <input type="text" placeholder="이메일" onChange={e => setLoginId(e.target.value)} style={inputStyle} />
             <input type="password" placeholder="비밀번호" onChange={e => setPassword(e.target.value)} style={{...inputStyle, marginBottom: '30px'}} />
             <button type="submit" style={buttonStyle}>로그인</button>
           </form>
