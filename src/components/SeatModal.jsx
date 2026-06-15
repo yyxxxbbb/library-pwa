@@ -11,7 +11,7 @@ const getTime = (t) => {
 };
 
 export default function SeatModal({
-  selectedSeat, setSelectedSeat, user, isAdmin,
+  selectedSeat, setSelectedSeat, user, isAdmin, currentUserData, // 🚨 [대공사 2단계] currentUserData 프롭 추가
   selectedDate, setSelectedDate, startTime, endTime, 
   showFullCalendar, setShowFullCalendar, isExamPeriod,
   setSystemAlert, setShowIdQR, forceCleanCheck, setForceCleanCheck 
@@ -218,7 +218,8 @@ export default function SeatModal({
     }
 
     try {
-      const currentUserId = user?.email?.split('@')[0];
+      // 🚨 [대공사 2단계] 이메일 대신 진짜 학번 사용
+      const currentUserId = currentUserData?.studentNo;
       
       const previousLog = seatHistory.find(log => {
         const id = log.uid?.split('@')[0] || log.studentNo;
@@ -288,8 +289,9 @@ export default function SeatModal({
 
     const displayName = isAdmin ? session.realName : maskName(session.realName);
     const displayId = isAdmin ? (session.uid?.split('@')[0] || session.studentNo) : (session.uid ? session.uid.substring(0, 4) + '****' : '');
-    const myStudentId = user?.email?.split('@')[0];
-    const isTargetMe = session.suspects?.includes(myStudentId) || session.uid?.includes(myStudentId);
+    // 🚨 [대공사 2단계] 신고 대상자 판별에 학번 사용
+    const myStudentId = currentUserData?.studentNo;
+    const isTargetMe = session.suspects?.includes(myStudentId) || session.uid?.includes(myStudentId) || session.studentNo === myStudentId;
 
     return { ...session, endTimeStr, logDateStr, badgeType, badgeText, badgeBg: bg, badgeColor: color, displayName, displayId, isAbnormal: badgeType === 'ABNORMAL_OUT', isTargetMe };
   });

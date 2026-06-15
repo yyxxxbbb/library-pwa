@@ -4,7 +4,6 @@ import { db } from '../firebase';
 import { collection, query, where, getDocs, doc, updateDoc, increment } from 'firebase/firestore'; 
 import { updateSeatStatus } from '../api/seatApi';
 
-// 🚨 [수정] setSystemAlert를 props로 받아옵니다.
 const ScannerPage = ({ setViewMode, setSystemAlert }) => {
   const [scanData, setScanData] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -77,7 +76,8 @@ const ScannerPage = ({ setViewMode, setSystemAlert }) => {
 
         // 3분 초과 시 퇴실 처리
         try {
-          const targetUserId = mySeat.userId?.split('@')[0] || actualStudentId.split('@')[0];
+          // 🚨 [대공사 2단계] 퇴실 처리 시 진짜 학번을 타겟으로 하여 페널티 및 이용 횟수 기록
+          const targetUserId = mySeat.studentNo || actualStudentId;
           await updateDoc(doc(db, "User", targetUserId), {
             totalUsageCount: increment(1),
             totalUsageTime: increment(usedMins)

@@ -1,7 +1,7 @@
 import { initializeApp } from "firebase/app";
 import { getFirestore } from "firebase/firestore";
 import { getAuth } from "firebase/auth";
-import { getStorage } from "firebase/storage";   // 🆕 추가
+import { getStorage } from "firebase/storage";
 
 const firebaseConfig = {
   apiKey: "AIzaSyD0sygIx9DjXWVArWUhDy_9ImMI5QlN600",
@@ -13,7 +13,11 @@ const firebaseConfig = {
   measurementId: "G-1ZXQ9EJJ3J"
 };
 
+// 1. Firebase 앱 초기화 (이 과정이 없으면 DB 연결이 불가능합니다)
 const app = initializeApp(firebaseConfig);
+
+// 2. 서비스 내보내기 (다른 파일에서 import 해서 사용)
 export const db = getFirestore(app);
 export const auth = getAuth(app);
-export const storage = getStorage(app);          // 🆕 export 추가
+export const storage = getStorage(app);
+auth.languageCode = 'ko';

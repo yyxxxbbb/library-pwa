@@ -84,7 +84,11 @@ function App() {
   const [todayReservations, setTodayReservations] = useState([]);
 
   const ADMIN_IDS = ['pjy', 'admin', 'manager', '1111111', '관리자', '2212020']; 
-  const isAdmin = user && user.email && ADMIN_IDS.includes(user.email.split('@')[0]);
+  
+  // 🚨 [해결] 기존 방식(이메일 쪼개기) 사용자도 무조건 관리자 권한을 유지하도록 강력한 백업 로직 추가
+  const isAdmin = 
+    (currentUserData && (ADMIN_IDS.includes(String(currentUserData.studentNo)) || currentUserData.role === 'MANAGER')) || 
+    (user && user.email && ADMIN_IDS.includes(user.email.split('@')[0]));
 
   const [currentTimeString, setCurrentTimeString] = useState(new Date().toTimeString().substring(0, 5));
   
@@ -300,26 +304,21 @@ function App() {
     return true; 
   });
 
-  // 🚨 [핵심 기능] 좌석 클릭 시 1인 1좌석 제한 방어 로직
   const handleSeatSelect = (seat) => {
     if (!seat) {
       setSelectedSeat(null);
       return;
     }
 
-    // 관리자가 아니면서, 내가 이미 점유/예약한 티켓이 존재할 때
     if (!isAdmin && myTicket) {
-      // 본인이 점유한 좌석은 클릭(퇴실) 가능하게 열어주고, 다른 좌석은 원천 차단
       if (seat.id !== myTicket.seatId) {
         setSystemAlert({
           title: "🚫 이용 제한",
           message: "1인 1좌석 원칙입니다.\n이미 예약하거나 이용 중인 좌석이 있습니다."
         });
-        return; // 여기서 실행 종료 (모달 안 열림)
+        return; 
       }
     }
-    
-    // 문제가 없으면 정상적으로 좌석 모달 오픈
     setSelectedSeat(seat);
   };
 
@@ -355,7 +354,8 @@ function App() {
   useEffect(() => {
     if (!user) return;
     const unsub = onSnapshot(collection(db, 'Log'), (snap) => {
-      const myId = user.email ? user.email.split('@')[0] : '';
+      // 🚨 알림 필터링 로직에도 구형 이메일 폴백 추가
+      const myId = currentUserData?.studentNo || user?.email?.split('@')[0] || '';
       const logs = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }))
         .filter(log => {
           const logUid = log.uid ? String(log.uid).split('@')[0] : '';
@@ -366,8 +366,7 @@ function App() {
         .sort((a, b) => getTime(b.timestamp || b.createdAt) - getTime(a.timestamp || a.createdAt));
       setNotifications(logs);
     });
-    return () => unsub();
-  }, [user, isAdmin]);
+  }, [user, isAdmin, currentUserData]);
 
   const pendingReportsCount = isAdmin ? notifications.filter(n => {
     const act = n.action || '';
@@ -379,7 +378,7 @@ function App() {
     if (isAdmin) return;
 
     const readPenalties = JSON.parse(localStorage.getItem(`read_penalties_${user.email}`) || '[]');
-    const myId = user.email.split('@')[0];
+    const myId = currentUserData?.studentNo || user?.email?.split('@')[0] || '';
     
     const unreadAlert = notifications.find(n => {
       const logUid = n.uid ? String(n.uid).split('@')[0] : '';
@@ -392,11 +391,12 @@ function App() {
     });
     
     if (unreadAlert) setPenaltyAlert(unreadAlert);
-  }, [notifications, user, isAdmin]);
+  }, [notifications, user, isAdmin, currentUserData]);
 
   useEffect(() => {
-    if (!user) return;
-    const notifyRef = collection(db, "User", user.email.split('@')[0], "notifications");
+    const actualId = currentUserData?.studentNo || user?.email?.split('@')[0];
+    if (!user || !actualId) return;
+    const notifyRef = collection(db, "User", actualId, "notifications");
     const q = query(notifyRef, where("read", "==", false));
     
     const unsub = onSnapshot(q, (snap) => {
@@ -407,7 +407,7 @@ function App() {
       });
     });
     return () => unsub();
-  }, [user]);
+  }, [user, currentUserData]);
 
   const handleDismissPenalty = () => {
     if (!penaltyAlert) return;
@@ -525,7 +525,9 @@ function App() {
     );
   };
 
-  if (!user) {
+  const isIncompleteUser = user && user.email && !user.email.includes('@test.com') && (!user.emailVerified || !user.displayName);
+
+  if (!user || isIncompleteUser) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh', background: '#f8fafc' }}>
         {systemSettings?.isExamActive && (
@@ -534,7 +536,8 @@ function App() {
             <span style={{ fontSize: '0.85rem', opacity: 0.9 }}>적용 기간: {systemSettings.examStartDate?.replace('T', ' ')} ~ {systemSettings.examEndDate?.replace('T', ' ')}</span>
           </div>
         )}
-        <Auth />
+        {/* Auth 컴포넌트에 props 전달도 추가하여 통제 기능 완벽 호환 */}
+        <Auth isExamPeriod={systemSettings?.isExamActive} />
       </div>
     );
   }
@@ -543,16 +546,8 @@ function App() {
     <div style={{ padding: isSmallMobile ? '10px' : '20px', width: '100%', maxWidth: '1300px', margin: '0 auto', boxSizing: 'border-box', fontFamily: 'sans-serif', background: '#f8fafc', minHeight: '100vh', position: 'relative', paddingBottom: myTicket && (viewMode === 'HOME' || viewMode === 'MAP') ? '140px' : '30px' }}>
       
       {systemAlert && (
-        <div style={{ 
-          position: 'fixed', top: 0, left: 0, width: '100%', height: '100%', 
-          backgroundColor: 'rgba(0, 0, 0, 0.6)', zIndex: 9999999, 
-          display: 'flex', justifyContent: 'center', alignItems: 'center' 
-        }}>
-          <div style={{ 
-            background: '#fff', padding: '40px', borderRadius: '24px', 
-            textAlign: 'center', boxShadow: '0 20px 50px rgba(0,0,0,0.5)', 
-            border: '3px solid #2563eb', maxWidth: '350px', width: '90%' 
-          }}>
+        <div style={{ position: 'fixed', top: 0, left: 0, width: '100%', height: '100%', backgroundColor: 'rgba(0, 0, 0, 0.6)', zIndex: 9999999, display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
+          <div style={{ background: '#fff', padding: '40px', borderRadius: '24px', textAlign: 'center', boxShadow: '0 20px 50px rgba(0,0,0,0.5)', border: '3px solid #2563eb', maxWidth: '350px', width: '90%' }}>
             <div style={{ fontSize: '3rem', marginBottom: '15px' }}>✅</div>
             <h2 style={{ margin: '0 0 10px 0', fontSize: '1.4rem', fontWeight: '900', color: '#0f172a' }}>{systemAlert.title}</h2>
             <p style={{ margin: 0, fontSize: '1.1rem', fontWeight: '700', whiteSpace: 'pre-wrap', color: '#475569' }}>{systemAlert.message}</p>
@@ -578,10 +573,10 @@ function App() {
             <p style={{ margin: '0 0 25px 0', fontSize: '0.9rem', color: '#64748b', fontWeight: '600' }}>입구 키오스크에 QR을 인식해 주세요.</p>
             
             <div style={{ background: '#f8fafc', padding: '25px', borderRadius: '20px', border: '1px solid #e2e8f0', display: 'flex', justifyContent: 'center', marginBottom: '20px' }}>
-              <QRCodeGen studentId={user?.email || 'student_id'} size={180} />
+              <QRCodeGen studentId={currentUserData?.studentNo || user?.email?.split('@')[0] || 'student_id'} size={180} />
             </div>
             
-            <p style={{ margin: '0 0 5px 0', fontSize: '1.2rem', fontWeight: '900', color: '#2563eb' }}>{user?.email?.split('@')[0]} 님</p>
+            <p style={{ margin: '0 0 5px 0', fontSize: '1.2rem', fontWeight: '900', color: '#2563eb' }}>{isAdmin ? '관리자' : (currentUserData?.name || user?.displayName || user?.email?.split('@')[0])} 님</p>
             <p style={{ margin: 0, fontSize: '0.85rem', color: '#94a3b8', fontWeight: '600' }}>울산과학대학교 스마트 도서관</p>
           </div>
         </div>
@@ -589,22 +584,17 @@ function App() {
 
       <header style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', marginBottom: '20px', background: '#fff', padding: '15px 25px', borderRadius: '20px', boxShadow: '0 4px 15px rgba(0,0,0,0.05)', width: '100%', boxSizing: 'border-box', justifyContent: 'space-between', alignItems: 'center', gap: '15px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '20px', width: isMobile ? '100%' : 'auto', justifyContent: isMobile ? 'center' : 'flex-start' }}>
-          
-          <h2 onClick={() => setViewMode('HOME')} style={{ margin: 0, color: '#0f172a', fontWeight: '900', fontSize: '1.5rem', whiteSpace: 'nowrap', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px' }} title="메인 화면으로 이동">
-            <svg fill="none" viewBox="0 0 24 24" strokeWidth="1.8" stroke="#2563eb" style={{ width: '28px', height: '28px' }}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25" />
-            </svg>
+          <h2 onClick={() => setViewMode('HOME')} style={{ margin: 0, color: '#0f172a', fontWeight: '900', fontSize: '1.5rem', whiteSpace: 'nowrap', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <svg fill="none" viewBox="0 0 24 24" strokeWidth="1.8" stroke="#2563eb" style={{ width: '28px', height: '28px' }}><path strokeLinecap="round" strokeLinejoin="round" d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25" /></svg>
             스마트 도서관
           </h2>
 
           {isAdmin && !isMobile && (
             <div style={{ display: 'flex', background: '#f1f5f9', borderRadius: '10px', padding: '4px', gap: '2px' }}>
-              <button onClick={() => setViewMode('HOME')} style={{ padding: '8px 16px', background: viewMode === 'HOME' || viewMode === 'MAP' ? '#2563eb' : 'transparent', color: viewMode === 'HOME' || viewMode === 'MAP' ? '#fff' : '#475569', border: 'none', borderRadius: '8px', fontWeight: '900', cursor: 'pointer', fontSize: '0.9rem', whiteSpace: 'nowrap', transition: '0.2s' }}>홈</button>
-              <button onClick={() => setViewMode('USERS')} style={{ position: 'relative', padding: '8px 16px', background: viewMode === 'USERS' ? '#2563eb' : 'transparent', color: viewMode === 'USERS' ? '#fff' : '#475569', border: 'none', borderRadius: '8px', fontWeight: '900', cursor: 'pointer', fontSize: '0.9rem', whiteSpace: 'nowrap', transition: '0.2s' }}>
-                회원관리 {pendingReportsCount > 0 && <span style={{ position: 'absolute', top: '-4px', right: '-4px', width: '10px', height: '10px', background: '#ef4444', borderRadius: '50%', border: '2px solid #fff' }}></span>}
-              </button>
-              <button onClick={() => setViewMode('SCANNER')} style={{ padding: '8px 16px', background: viewMode === 'SCANNER' ? '#2563eb' : 'transparent', color: viewMode === 'SCANNER' ? '#fff' : '#475569', border: 'none', borderRadius: '8px', fontWeight: '900', cursor: 'pointer', fontSize: '0.9rem', whiteSpace: 'nowrap', transition: '0.2s' }}>입구 스캐너</button>
-              <button onClick={() => setViewMode('EVENTS_ADMIN')} style={{ padding: '8px 16px', background: viewMode === 'EVENTS_ADMIN' ? '#2563eb' : 'transparent', color: viewMode === 'EVENTS_ADMIN' ? '#fff' : '#475569', border: 'none', borderRadius: '8px', fontWeight: '900', cursor: 'pointer', fontSize: '0.9rem', whiteSpace: 'nowrap', transition: '0.2s' }}>관리</button>
+              <button onClick={() => setViewMode('HOME')} style={{ padding: '8px 16px', background: viewMode === 'HOME' || viewMode === 'MAP' ? '#2563eb' : 'transparent', color: viewMode === 'HOME' || viewMode === 'MAP' ? '#fff' : '#475569', border: 'none', borderRadius: '8px', fontWeight: '900', cursor: 'pointer', fontSize: '0.9rem', transition: '0.2s' }}>홈</button>
+              <button onClick={() => setViewMode('USERS')} style={{ position: 'relative', padding: '8px 16px', background: viewMode === 'USERS' ? '#2563eb' : 'transparent', color: viewMode === 'USERS' ? '#fff' : '#475569', border: 'none', borderRadius: '8px', fontWeight: '900', cursor: 'pointer', fontSize: '0.9rem', transition: '0.2s' }}>회원관리 {pendingReportsCount > 0 && <span style={{ position: 'absolute', top: '-4px', right: '-4px', width: '10px', height: '10px', background: '#ef4444', borderRadius: '50%', border: '2px solid #fff' }}></span>}</button>
+              <button onClick={() => setViewMode('SCANNER')} style={{ padding: '8px 16px', background: viewMode === 'SCANNER' ? '#2563eb' : 'transparent', color: viewMode === 'SCANNER' ? '#fff' : '#475569', border: 'none', borderRadius: '8px', fontWeight: '900', cursor: 'pointer', fontSize: '0.9rem', transition: '0.2s' }}>입구 스캐너</button>
+              <button onClick={() => setViewMode('EVENTS_ADMIN')} style={{ padding: '8px 16px', background: viewMode === 'EVENTS_ADMIN' ? '#2563eb' : 'transparent', color: viewMode === 'EVENTS_ADMIN' ? '#fff' : '#475569', border: 'none', borderRadius: '8px', fontWeight: '900', cursor: 'pointer', fontSize: '0.9rem', transition: '0.2s' }}>관리</button>
             </div>
           )}
         </div>
@@ -622,12 +612,13 @@ function App() {
         )}
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, justifyContent: isMobile ? 'center' : 'flex-end', width: isMobile ? '100%' : 'auto', flexWrap: 'wrap' }}>
-          <p style={{ margin: 0, fontWeight: '900', color: '#475569', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>👤 {user?.email?.split('@')[0]}님</p>
+          {/* 🚨 [해결] 기존 이메일 쪼개기 방식도 정상 출력되도록 강력한 백업 로직 추가 */}
+          <p style={{ margin: 0, fontWeight: '900', color: '#475569', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>
+            👤 {isAdmin ? '관리자' : (currentUserData?.name || user?.displayName || user?.email?.split('@')[0])}님
+          </p>
           <div style={{ position: 'relative' }}>
             <button onClick={toggleNotifications} style={{ background: '#f1f5f9', border: 'none', width: '38px', height: '38px', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative', transition: '0.2s' }}>
-              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="#475569" style={{ width: '18px', height: '18px' }}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M14.857 17.082a23.848 23.848 0 005.454-1.31A8.967 8.967 0 0118 9.75v-.7V9A6 6 0 006 9v.75a8.967 8.967 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 01-5.714 0m5.714 0a3 3 0 11-5.714 0" />
-              </svg>
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="#475569" style={{ width: '18px', height: '18px' }}><path strokeLinecap="round" strokeLinejoin="round" d="M14.857 17.082a23.848 23.848 0 005.454-1.31A8.967 8.967 0 0118 9.75v-.7V9A6 6 0 006 9v.75a8.967 8.967 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 01-5.714 0m5.714 0a3 3 0 11-5.714 0" /></svg>
               {unreadCount > 0 && <span style={{ position: 'absolute', top: '-2px', right: '-2px', background: '#ef4444', color: '#fff', fontSize: '0.65rem', fontWeight: '900', width: '18px', height: '18px', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '50%', border: '2px solid #fff' }}>{unreadCount > 9 ? '9+' : unreadCount}</span>}
             </button>
             {showNotifications && (
@@ -647,20 +638,14 @@ function App() {
             )}
           </div>
           
-          <button onClick={() => setViewMode(viewMode === 'MYPAGE' ? 'HOME' : 'MYPAGE')} style={{ background: viewMode === 'MYPAGE' ? '#2563eb' : '#f1f5f9', color: viewMode === 'MYPAGE' ? '#fff' : '#334155', border: 'none', borderRadius: '10px', fontWeight: '900', fontSize: '0.8rem', padding: '8px 14px', cursor: 'pointer', whiteSpace: 'nowrap', transition: '0.2s' }}>{viewMode === 'MYPAGE' ? '홈으로' : '마이페이지'}</button>
-          
-          <button onClick={async () => { if (window.confirm("로그아웃 하시겠습니까?")) await signOut(auth); }} style={{ background: '#fee2e2', color: '#dc2626', border: 'none', borderRadius: '10px', fontWeight: '900', fontSize: '0.8rem', padding: '8px 14px', cursor: 'pointer', whiteSpace: 'nowrap', transition: '0.2s' }}>로그아웃</button>
+          <button onClick={() => setViewMode(viewMode === 'MYPAGE' ? 'HOME' : 'MYPAGE')} style={{ background: viewMode === 'MYPAGE' ? '#2563eb' : '#f1f5f9', color: viewMode === 'MYPAGE' ? '#fff' : '#334155', border: 'none', borderRadius: '10px', fontWeight: '900', fontSize: '0.8rem', padding: '8px 14px', cursor: 'pointer', transition: '0.2s' }}>{viewMode === 'MYPAGE' ? '홈으로' : '마이페이지'}</button>
+          <button onClick={async () => { if (window.confirm("로그아웃 하시겠습니까?")) await signOut(auth); }} style={{ background: '#fee2e2', color: '#dc2626', border: 'none', borderRadius: '10px', fontWeight: '900', fontSize: '0.8rem', padding: '8px 14px', cursor: 'pointer', transition: '0.2s' }}>로그아웃</button>
         </div>
       </header>
 
       {isAdmin && viewMode === 'USERS' && <AdminDashboard />}
       {viewMode === 'MYPAGE' && <MyPage user={user} setViewMode={setViewMode} />}
-      {viewMode === 'SCANNER' && isAdmin && (
-        <ScannerPage 
-          setViewMode={setViewMode} 
-          setSystemAlert={setSystemAlert}
-        />
-      )}
+      {viewMode === 'SCANNER' && isAdmin && <ScannerPage setViewMode={setViewMode} setSystemAlert={setSystemAlert} />}
       {viewMode === 'RANKING' && <RankingPage onBack={() => setViewMode('HOME')} user={user}/>}
       
       {viewMode === 'EVENTS' && <EventBoard initialTab={boardTab} onBack={() => setViewMode('HOME')} onSelectEvent={(ev) => { setSelectedEvent(ev); setViewMode('EVENT_DETAIL'); }} onSelectNotice={(notice) => { setSelectedEvent({ ...notice, _type: 'NOTICE' }); setViewMode('EVENT_DETAIL'); }} />}
@@ -717,22 +702,6 @@ function App() {
                       {renderFacilityBadge('1층')}
                     </div>
                     <p style={{ margin: '0 0 18px 0', fontSize: '0.85rem', color: '#64748b', fontWeight: '700' }}>수용 인원: 72명 | 테이블 5개 | 좌석 68석</p>
-                    <div style={{ display: 'flex', gap: '15px', marginBottom: '20px' }}>
-                      <div style={{ width: '110px', height: '110px', background: '#f1f5f9', borderRadius: '16px', display: 'flex', justifyContent: 'center', alignItems: 'center', flexShrink: 0 }}>
-                        <svg viewBox="0 0 100 100" fill="none" style={{ width: '70%', height: '70%', opacity: 0.6 }}><rect x="20" y="20" width="60" height="80" rx="4" fill="#2563eb"/><rect x="32" y="32" width="12" height="12" rx="2" fill="#fff"/><rect x="56" y="32" width="12" height="12" rx="2" fill="#fff"/><rect x="32" y="56" width="12" height="12" rx="2" fill="#fff"/><rect x="56" y="56" width="12" height="12" rx="2" fill="#fff"/></svg>
-                      </div>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', flex: 1, justifyContent: 'center' }}>
-                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                          <div><div style={{ fontSize: '0.85rem', fontWeight: '800', color: '#1e293b' }}>일반 열람석 (입구/창가/벽면/계단)</div><div style={{ fontSize: '0.75rem', color: '#64748b' }}>총 60석</div></div>
-                        </div>
-                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                          <div><div style={{ fontSize: '0.85rem', fontWeight: '800', color: '#1e293b' }}>스터디룸 1 (101-A)</div><div style={{ fontSize: '0.75rem', color: '#64748b' }}>최대 6명 / 좌석 8석</div></div>
-                        </div>
-                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                          <div><div style={{ fontSize: '0.85rem', fontWeight: '800', color: '#1e293b' }}>스터디룸 2 (101-B 좌식)</div><div style={{ fontSize: '0.75rem', color: '#94a3b8' }}>최대 6명 (좌석 산정 제외)</div></div>
-                        </div>
-                      </div>
-                    </div>
                     <button onClick={() => { setActiveFloor('1층'); setIsBookingMode(false); setSelectedSeat(null); setViewMode('MAP'); mapRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }} style={{ marginTop: 'auto', width: '100%', padding: '12px', borderRadius: '12px', border: '1px solid #e2e8f0', background: '#fff', color: '#2563eb', fontWeight: '800', fontSize: '0.9rem', cursor: 'pointer', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '6px', transition: '0.2s' }}>배치도 보기 →</button>
                   </div>
 
@@ -742,22 +711,6 @@ function App() {
                       {renderFacilityBadge('2층')}
                     </div>
                     <p style={{ margin: '0 0 18px 0', fontSize: '0.85rem', color: '#64748b', fontWeight: '700' }}>수용 인원: 40명 | 테이블 6개 | 좌석 42석</p>
-                    <div style={{ display: 'flex', gap: '15px', marginBottom: '20px' }}>
-                      <div style={{ width: '110px', height: '110px', background: '#f1f5f9', borderRadius: '16px', display: 'flex', justifyContent: 'center', alignItems: 'center', flexShrink: 0 }}>
-                        <svg viewBox="0 0 100 100" fill="none" style={{ width: '70%', height: '70%', opacity: 0.6 }}><rect x="20" y="20" width="60" height="80" rx="4" fill="#2563eb"/><rect x="32" y="32" width="12" height="12" rx="2" fill="#fff"/><rect x="56" y="32" width="12" height="12" rx="2" fill="#fff"/><rect x="32" y="56" width="12" height="12" rx="2" fill="#fff"/><rect x="56" y="56" width="12" height="12" rx="2" fill="#fff"/></svg>
-                      </div>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', flex: 1, justifyContent: 'center' }}>
-                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                          <div><div style={{ fontSize: '0.85rem', fontWeight: '800', color: '#1e293b' }}>집중 열람석 (창가/중앙/계단입구)</div><div style={{ fontSize: '0.75rem', color: '#64748b' }}>총 32석</div></div>
-                        </div>
-                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                          <div><div style={{ fontSize: '0.85rem', fontWeight: '800', color: '#1e293b' }}>스터디룸 (101-C)</div><div style={{ fontSize: '0.75rem', color: '#64748b' }}>최대 4명 / 좌석 5석</div></div>
-                        </div>
-                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                          <div><div style={{ fontSize: '0.85rem', fontWeight: '800', color: '#1e293b' }}>스터디룸 (101-D)</div><div style={{ fontSize: '0.75rem', color: '#64748b' }}>최대 4명 / 좌석 5석</div></div>
-                        </div>
-                      </div>
-                    </div>
                     <button onClick={() => { setActiveFloor('2층'); setIsBookingMode(false); setSelectedSeat(null); setViewMode('MAP'); mapRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }} style={{ marginTop: 'auto', width: '100%', padding: '12px', borderRadius: '12px', border: '1px solid #e2e8f0', background: '#fff', color: '#2563eb', fontWeight: '800', fontSize: '0.9rem', cursor: 'pointer', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '6px', transition: '0.2s' }}>배치도 보기 →</button>
                   </div>
 
@@ -767,22 +720,6 @@ function App() {
                       {renderFacilityBadge('4층')}
                     </div>
                     <p style={{ margin: '0 0 18px 0', fontSize: '0.85rem', color: '#64748b', fontWeight: '700' }}>수용 인원: 54명 | 테이블 15개 | 좌석 54석</p>
-                    <div style={{ display: 'flex', gap: '15px', marginBottom: '20px' }}>
-                      <div style={{ width: '110px', height: '110px', background: '#f1f5f9', borderRadius: '16px', display: 'flex', justifyContent: 'center', alignItems: 'center', flexShrink: 0 }}>
-                        <svg viewBox="0 0 100 100" fill="none" style={{ width: '70%', height: '70%', opacity: 0.6 }}><rect x="20" y="20" width="60" height="80" rx="4" fill="#3b82f6"/><rect x="32" y="32" width="12" height="12" rx="2" fill="#fff"/><rect x="56" y="32" width="12" height="12" rx="2" fill="#fff"/><rect x="32" y="56" width="12" height="12" rx="2" fill="#fff"/><rect x="56" y="56" width="12" height="12" rx="2" fill="#fff"/></svg>
-                      </div>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', flex: 1, justifyContent: 'center' }}>
-                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                          <div><div style={{ fontSize: '0.85rem', fontWeight: '800', color: '#1e293b' }}>입구 좌/우측 구역 (대칭 구조)</div><div style={{ fontSize: '0.75rem', color: '#64748b' }}>쿠션석·1인석·창가석 총 34석</div></div>
-                        </div>
-                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                          <div><div style={{ fontSize: '0.85rem', fontWeight: '800', color: '#1e293b' }}>중앙 테이블 구역</div><div style={{ fontSize: '0.75rem', color: '#64748b' }}>테이블 2개 / 총 10석</div></div>
-                        </div>
-                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                          <div><div style={{ fontSize: '0.85rem', fontWeight: '800', color: '#1e293b' }}>중앙 창가 구역</div><div style={{ fontSize: '0.75rem', color: '#64748b' }}>테이블 1개 / 총 10석</div></div>
-                        </div>
-                      </div>
-                    </div>
                     <button onClick={() => { setActiveFloor('4층'); setIsBookingMode(false); setSelectedSeat(null); setViewMode('MAP'); mapRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }} style={{ marginTop: 'auto', width: '100%', padding: '12px', borderRadius: '12px', border: '1px solid #e2e8f0', background: '#fff', color: '#3b82f6', fontWeight: '800', fontSize: '0.9rem', cursor: 'pointer', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '6px', transition: '0.2s' }}>배치도 보기 →</button>
                   </div>
                 </div>
@@ -805,10 +742,7 @@ function App() {
                     dbNotices.map((notice, idx) => (
                       <div 
                         key={notice.id || idx} 
-                        onClick={() => { 
-                          setSelectedEvent({ ...notice, _type: 'NOTICE' }); 
-                          setViewMode('EVENT_DETAIL'); 
-                        }} 
+                        onClick={() => { setSelectedEvent({ ...notice, _type: 'NOTICE' }); setViewMode('EVENT_DETAIL'); }} 
                         style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 0', borderBottom: idx === dbNotices.length - 1 ? 'none' : '1px solid #f1f5f9', cursor: 'pointer', transition: '0.2s' }}
                       >
                         <span style={{ fontSize: '0.95rem', color: '#334155', fontWeight: '600', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', marginRight: '15px' }}>
@@ -822,7 +756,6 @@ function App() {
                   )}
                 </div>
               </div>
-              
               <EventBanner onSeeAll={() => { setBoardTab('EVENT'); setViewMode('EVENTS'); }} onSelectEvent={(ev) => { setSelectedEvent(ev); setViewMode('EVENT_DETAIL'); }} />
             </>
           )}
@@ -877,11 +810,7 @@ function App() {
                 )}
 
                 <div style={{ display: 'flex', gap: '10px', gridColumn: isBookingMode ? 'auto' : '1 / -1' }}>
-                  {[
-                    { id: '1층', label: '도서관(1층)' },
-                    { id: '2층', label: '도서관(2층)' },
-                    { id: '4층', label: '열람실(4층)' }
-                  ].map(floor => (
+                  {[{ id: '1층', label: '도서관(1층)' }, { id: '2층', label: '도서관(2층)' }, { id: '4층', label: '열람실(4층)' }].map(floor => (
                     <button key={floor.id} onClick={() => setActiveFloor(floor.id)} 
                       style={{ flex: 1, padding: '14px 0', borderRadius: '12px', border: activeFloor === floor.id ? 'none' : '1px solid #e2e8f0', background: activeFloor === floor.id ? '#2563eb' : '#f8fafc', color: activeFloor === floor.id ? '#fff' : '#64748b', fontWeight: '900', fontSize: '0.95rem', cursor: 'pointer', transition: '0.2s', boxShadow: activeFloor === floor.id ? '0 4px 10px rgba(37, 99, 235, 0.2)' : 'none' }}>
                       {floor.label}
@@ -890,7 +819,6 @@ function App() {
                 </div>
               </div>
 
-              {/* 🚨 1인 1좌석 클릭 차단을 위해 FloorMap의 setSelectedSeat를 handleSeatSelect로 변경 */}
               <FloorMap activeFloor={activeFloor} title={floorTitles[activeFloor]} seats={displaySeats} user={user} isAdmin={isAdmin} currentUserData={currentUserData} viewMode={viewMode} setSelectedSeat={handleSeatSelect} />
               
               {isBookingMode && (
@@ -899,6 +827,7 @@ function App() {
                   setSelectedSeat={setSelectedSeat} 
                   user={user} 
                   isAdmin={isAdmin} 
+                  currentUserData={currentUserData} 
                   selectedDate={selectedDate} 
                   setSelectedDate={setSelectedDate} 
                   startTime={startTime} 
@@ -958,7 +887,8 @@ function App() {
               ) : (
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <div>
-                    <p style={{ margin: '0 0 4px 0', color: '#2563eb', fontSize: '0.85rem', fontWeight: '900' }}>👤 {currentUserData?.name || user?.email?.split('@')[0]}님이 사용중인 좌석</p>
+                    {/* 🚨 [해결] 기존 방식 이용자도 이름이 올바르게 렌더링되도록 백업 로직 추가 */}
+                    <p style={{ margin: '0 0 4px 0', color: '#2563eb', fontSize: '0.85rem', fontWeight: '900' }}>👤 {isAdmin ? '관리자' : (currentUserData?.name || user?.displayName || user?.email?.split('@')[0])}님이 사용중인 좌석</p>
                     <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px' }}>
                       <h3 style={{ margin: 0, fontSize: '1.5rem', fontWeight: '900', color: '#0f172a' }}>{myTicket.seatId}</h3>
                       <p style={{ margin: 0, color: '#64748b', fontSize: '0.85rem', fontWeight: '700' }}>~ {myTicket.endTime} 까지</p>
