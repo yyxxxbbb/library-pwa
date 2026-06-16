@@ -3,8 +3,11 @@ import { getFirestore } from "firebase/firestore";
 import { getAuth } from "firebase/auth";
 import { getStorage } from "firebase/storage";
 
+<<<<<<< HEAD
 console.log("확인용 API 키:", import.meta.env.VITE_GEMINI_API_KEY); // 이 키가 undefined라면 .env 설정 문제입니다.
 
+=======
+>>>>>>> afc30d88394a8ac2436b76f1aa384a1f3125ce2a
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_GEMINI_API_KEY,
   authDomain: "library-pwa-78026.firebaseapp.com",

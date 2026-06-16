@@ -257,6 +257,7 @@ const Auth = ({ isExamPeriod }) => {
           <button onClick={async () => {
             if (!resetStudentId || !resetStudentId.includes('@')) return alert("올바른 이메일 주소를 입력해주세요.");
             try {
+<<<<<<< HEAD
               // 1. 핵심: 이동할 주소와 앱 내 처리 설정을 명시합니다.
               const actionCodeSettings = {
                 url: 'https://library-pwa-psi.vercel.app/reset-password', // 배포하신 실제 도메인 경로
@@ -270,6 +271,16 @@ const Auth = ({ isExamPeriod }) => {
               setIsForgotPasswordMode(false);
               setResetStudentId('');
             } catch (error) {
+=======
+              // 🚨 DB를 조회하지 않고 파이어베이스 Auth로 다이렉트 요청! (권한 에러 원천 차단)
+              await sendPasswordResetEmail(auth, resetStudentId);
+              
+              alert(`✅ [${resetStudentId}]\n위 주소로 비밀번호 재설정 이메일을 발송했습니다.\n\n이메일 확인 후 새 비밀번호로 로그인해주세요.`);
+              setIsForgotPasswordMode(false);
+              setResetStudentId('');
+            } catch (error) {
+              // 파이어베이스에 없는 이메일일 경우의 에러 처리
+>>>>>>> afc30d88394a8ac2436b76f1aa384a1f3125ce2a
               if (error.code === 'auth/user-not-found') {
                 alert("❌ 가입되지 않은 이메일입니다.");
               } else {
