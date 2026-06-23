@@ -14,7 +14,7 @@ const firebaseConfig = {
   appId: "1:728116213936:web:0d21a9894586a37e4aa375",
   measurementId: "G-1ZXQ9EJJ3J"
 };
-
+console.log("캐시 비우기 얍!");
 // 1. Firebase 앱 초기화 (이 과정이 없으면 DB 연결이 불가능합니다)
 const app = initializeApp(firebaseConfig);
 

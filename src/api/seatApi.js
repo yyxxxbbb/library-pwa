@@ -24,8 +24,9 @@ export const updateSeatStatus = async (seatId, newStatus, userId = null, hours =
     let updateData = {
       status: newStatus,
       userId: isClearing ? null : (userId || seatData?.userId || null),
-      userName: isClearing ? null : (userName || seatData?.userName || null), 
-      updatedAt: serverTimestamp() 
+      userName: isClearing ? null : (userName || seatData?.userName || null),
+      studentNo: isClearing ? null : (studentNo || seatData?.studentNo || null), // ✨ 이 한 줄을 꼭 추가하세요!
+      updatedAt: serverTimestamp()
     };
 
     let actionType = '';

@@ -54,7 +54,7 @@ export const handleLibraryAction = async ({
         seatId: seat.id, userId: user.email, date: dateStr, startTime: startTime || "09:00", endTime: endTime || "11:00", status: 'RESERVED', createdAt: serverTimestamp()
       });
 
-      await updateSeatStatus(seat.id, 'RESERVED', user?.email, finalHours, currentUserName, reminderMinutes);
+      await updateSeatStatus(seat.id, 'RESERVED', user?.email, finalHours, currentUserName, reminderMinutes, studentNo || "");
       alert(`⏱️ ${finalHours}시간 예약이 완료되었습니다.`);
       addLog(studentNo, 'RESERVE', 'SUCCESS', seat.id);
     }
@@ -249,7 +249,7 @@ export const handleLibraryAction = async ({
       await clearReservations('CANCELLED'); await updateSeatStatus(seat.id, 'DISABLED', null, 0, null, 20);
     }
     else if (actionType === 'OCCUPY') {
-      await updateSeatStatus(seat.id, 'OCCUPIED', user?.email, seat.reservedHours || 1, currentUserName, reminderMinutes);
+      await updateSeatStatus(seat.id, 'OCCUPIED', user?.email, seat.reservedHours || 1, currentUserName, reminderMinutes, studentNo || "");
       await clearReservations('OCCUPIED'); 
     }
     else if (actionType === 'ENABLE') {

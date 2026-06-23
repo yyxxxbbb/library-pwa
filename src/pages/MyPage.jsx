@@ -102,7 +102,7 @@ const MyPage = ({ user, setViewMode }) => {
       </div>
 
       {/* 🚨 딱 여기에 넣어주세요! (그러면 맨 위 import에 불이 들어옵니다) */}
-      <QRCodeGen studentId={user?.studentNo || user?.email?.split('@')[0] || "학번없음"} />
+      <QRCodeGen studentId={user?.email || "이메일없음"} />
 
       {/* 1️⃣ 내 패널티 상태 카드 */}
       <div style={{ 

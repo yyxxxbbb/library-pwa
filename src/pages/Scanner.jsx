@@ -24,15 +24,33 @@ const ScannerPage = ({ setViewMode, setSystemAlert }) => {
       const seatsRef = collection(db, "Seat");
       const snapshot = await getDocs(seatsRef);
       
-      const mySeat = snapshot.docs.map(d => ({ id: d.id, ...d.data() })).find(s => 
-        (s.userId?.includes(actualStudentId) || s.userName === actualStudentId || s.studentNo === actualStudentId) &&
-        (s.status === 'RESERVED' || s.status === 'OCCUPIED')
-      );
+    const mySeat = snapshot.docs.map(d => ({ id: d.id, ...d.data() })).find(s => {
+      const targetId = String(actualStudentId).trim().toLowerCase();
+      const dbUserId = String(s.userId || "").trim().toLowerCase();
+      const dbUserName = String(s.userName || "").trim().toLowerCase();
+      const dbStudentNo = String(s.studentNo || "").trim().toLowerCase();
 
-      if (!mySeat) {
-        setSystemAlert({ title: "❌ 인증 실패", message: "예약되거나 사용 중인 좌석이 없습니다." });
-        return;
-      }
+      const isMatch = dbUserId.includes(targetId) || dbUserName === targetId || dbStudentNo === targetId;
+      const isValidStatus = s.status === 'RESERVED' || s.status === 'OCCUPIED';
+
+      return isMatch && isValidStatus;
+    });
+
+    if (!mySeat) {
+      // DB에 현재 '예약/사용중'인 사람들의 아이디를 싹 다 긁어옵니다.
+      const bookedUsers = snapshot.docs
+        .filter(d => d.data().status === 'RESERVED' || d.data().status === 'OCCUPIED')
+        .map(d => d.data().userId || d.data().studentNo || '아이디없음')
+        .join(', ');
+
+      setSystemAlert({ 
+        type: 'error', 
+        // 💡 에러 창에 스캔된 QR 값과 DB에 적힌 예약자 명단을 동시에 띄웁니다!
+        message: `❌ 인증 실패\n스캔된 QR: [${actualStudentId}]\nDB 예약자: [${bookedUsers || '아무도 예약안함'}]` 
+      });
+      setIsLoading(false);
+      return;
+    }
 
       // 1. 예약 상태에서 입실 스캔 시
       if (mySeat.status === 'RESERVED') {

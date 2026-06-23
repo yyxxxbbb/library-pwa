@@ -595,7 +595,7 @@ function App() {
             <p style={{ margin: '0 0 25px 0', fontSize: '0.9rem', color: '#64748b', fontWeight: '600' }}>입구 키오스크에 QR을 인식해 주세요.</p>
             
             <div style={{ background: '#f8fafc', padding: '25px', borderRadius: '20px', border: '1px solid #e2e8f0', display: 'flex', justifyContent: 'center', marginBottom: '20px' }}>
-              <QRCodeGen studentId={currentUserData?.studentNo || user?.email?.split('@')[0] || 'student_id'} size={180} />
+              <QRCodeGen studentId={user?.email || "이메일없음"} size={180} />
             </div>
             
             <p style={{ margin: '0 0 5px 0', fontSize: '1.2rem', fontWeight: '900', color: '#2563eb' }}>{isAdmin ? '관리자' : (currentUserData?.name || user?.displayName || user?.email?.split('@')[0])} 님</p>
